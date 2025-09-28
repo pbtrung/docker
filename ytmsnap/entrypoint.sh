@@ -296,7 +296,7 @@ process_video() {
     
     # Apply loudness normalization and stream to FIFO
     if [ -n "$SNAPFIFO" ] && [ -p "$SNAPFIFO" ]; then
-        normalize_and_stream "$actual_file" "$SNAPFIFO"
+        stream_audio "$actual_file" "$SNAPFIFO"
     fi
     
     # Clean up temporary file
@@ -311,37 +311,25 @@ process_video() {
 #   input_file - Path to audio file
 #   fifo_path - Path to FIFO
 #######################################
-normalize_and_stream() {
+stream_audio() {
     input_file="$1"
     fifo_path="$2"
     
-    log "Normalizing and streaming audio"
+    log "Streaming audio"
     
-    # First pass: measure loudness
-    json=$(ffmpeg -i "$input_file" -af loudnorm=I=-23:LRA=7:TP=-2:print_format=json -f null - 2>&1 | awk '/^\{/,/^\}/')
-    
-    if [ -z "$json" ]; then
-        log "WARNING: Failed to measure loudness, using default normalization"
-        ffmpeg -i "$input_file" -af loudnorm=I=-23:LRA=7:TP=-2 -f s16le -ac 2 -ar 44100 "$fifo_path" 2>/dev/null
-        return
+    # Convert to PCM format and stream to FIFO
+    # -y: overwrite output without asking
+    # -f s16le: signed 16-bit little-endian PCM format
+    # -acodec pcm_s16le: use PCM signed 16-bit little-endian codec
+    # -ac 2: stereo (2 channels)
+    # -ar 44100: 44.1kHz sample rate
+    if ! ffmpeg -y -i "$input_file" -f u16le -acodec pcm_s16le -ac 2 -ar 44100 "$fifo_path" 2>/dev/null; then
+        log "WARNING: Failed to convert audio file: $(basename "$input_file")"
+        return 1
     fi
     
-    # Extract measured values
-    measured_i=$(echo "$json" | jq -r '.input_i // empty')
-    measured_tp=$(echo "$json" | jq -r '.input_tp // empty')
-    measured_lra=$(echo "$json" | jq -r '.input_lra // empty')
-    measured_thresh=$(echo "$json" | jq -r '.input_thresh // empty')
-    target_offset=$(echo "$json" | jq -r '.target_offset // empty')
-    
-    # Second pass: apply normalization
-    if [ -n "$measured_i" ] && [ -n "$measured_tp" ] && [ -n "$measured_lra" ] && [ -n "$measured_thresh" ] && [ -n "$target_offset" ]; then
-        ffmpeg -i "$input_file" \
-            -af "loudnorm=I=-23:LRA=7:TP=-2:measured_I=$measured_i:measured_LRA=$measured_lra:measured_TP=$measured_tp:measured_thresh=$measured_thresh:offset=$target_offset:linear=true" \
-            -f s16le -ac 2 -ar 44100 "$fifo_path" 2>/dev/null
-    else
-        log "WARNING: Incomplete loudness measurements, using simple normalization"
-        ffmpeg -i "$input_file" -af loudnorm=I=-23:LRA=7:TP=-2 -f s16le -ac 2 -ar 44100 "$fifo_path" 2>/dev/null
-    fi
+    log "Successfully streamed audio to FIFO"
+    return 0
 }
 
 #######################################
