@@ -317,7 +317,6 @@ stream_audio() {
     log "Streaming audio with loudnorm"
     
     if ! ffmpeg -y -i "$input_file" \
-        -af "loudnorm=I=-16:TP=-1.0:LRA=11" \
         -f s16le -acodec pcm_s16le -ac 2 -ar 44100 "$fifo_path" 2>/dev/null; then
         log "WARNING: Failed to convert audio file: $(basename "$input_file")"
         return 1
