@@ -318,7 +318,7 @@ normalize_and_stream() {
     log "Normalizing and streaming audio"
     
     # First pass: measure loudness
-    json=$(ffmpeg -i "$input_file" -af loudnorm=I=-23:LRA=7:TP=-2:print_format=json -f null - 2>&1 | awk '/^{/,/^}/')
+    json=$(ffmpeg -i "$input_file" -af loudnorm=I=-23:LRA=7:TP=-2:print_format=json -f null - 2>&1 | awk '/^\{/,/^\}/')
     
     if [ -z "$json" ]; then
         log "WARNING: Failed to measure loudness, using default normalization"
