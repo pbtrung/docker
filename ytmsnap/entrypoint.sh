@@ -314,7 +314,7 @@ stream_audio() {
     input_file="$1"
     fifo_path="$2"
     
-    log "Streaming audio with loudnorm"
+    log "Streaming audio"
     
     if ! ffmpeg -y -i "$input_file" \
         -f s16le -acodec pcm_s16le -ac 2 -ar 44100 "$fifo_path" 2>/dev/null; then
