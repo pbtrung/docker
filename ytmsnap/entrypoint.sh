@@ -322,7 +322,7 @@ stream_audio() {
     # -acodec pcm_s16le: use PCM signed 16-bit little-endian codec
     # -ac 2: stereo (2 channels)
     # -ar 44100: 44.1kHz sample rate
-    if ! ffmpeg -y -i "$input_file" -f u16le -acodec pcm_s16le -ac 2 -ar 44100 "$fifo_path" 2>&1; then
+    if ! ffmpeg -y -i "$input_file" -f s16le -acodec pcm_s16le -ac 2 -ar 44100 "$fifo_path" 2>&1; then
         log "WARNING: Failed to convert audio file: $(basename "$input_file")"
         return 1
     fi
