@@ -5,7 +5,9 @@ RUN echo "@testing https://dl-cdn.alpinelinux.org/alpine/edge/testing" >> /etc/a
 RUN apk update && \
     apk --no-cache upgrade && \
     apk --no-cache add snapcast-server snapweb@testing librespot@testing \
-        wget yt-dlp jq sqlite ffmpeg coreutils
+        wget yt-dlp jq sqlite ffmpeg coreutils py3-pip
+
+RUN pip3 install ffmpeg-normalize
 
 WORKDIR /script
 COPY entrypoint.sh /script/
