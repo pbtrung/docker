@@ -276,16 +276,16 @@ process_video() {
     
     # Generate random filename
     rand_name=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
-    temp_file="${OUTPUT_DIR}/tmp_${rand_name}"
+    temp_file="${OUTPUT_DIR}/${rand_name}"
     
     # Download with yt-dlp - ash doesn't support arrays, use string
-    if ! yt-dlp --cookies "$COOKIES_FILE" --no-playlist --output "$temp_file" "$url" 2>&1; then
+    if ! yt-dlp --cookies "$COOKIES_FILE" --no-playlist --output "${temp_file}.%(ext)s" "$url" 2>&1; then
         log "Failed to download: $video_id"
         return 1
     fi
     
     # Find the actual downloaded file (yt-dlp adds extension)
-    actual_file=$(find "$OUTPUT_DIR" -name "tmp_${rand_name}*" -type f | head -n 1)
+    actual_file=$(find "$OUTPUT_DIR" -name "${rand_name}*" -type f | head -n 1)
     
     if [ ! -f "$actual_file" ]; then
         log "Downloaded file not found for: $video_id"
