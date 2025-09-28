@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/bin/ash
 
 # Music streaming script with YouTube Music integration
 # Improved version with better error handling, logging, and maintainability
 
-set -euo pipefail  # Exit on error, undefined vars, pipe failures
+set -eu  # Exit on error, undefined vars (ash doesn't support pipefail)
 
 # Configuration
 readonly CONFIG_FILE="${MUSIC_CONFIG_FILE:-/music/config.json}"
@@ -53,16 +53,16 @@ die() {
 cleanup() {
     log "Cleaning up..."
     
-    if [[ -n "$SNAPSERVER_PID" ]]; then
+    if [ -n "$SNAPSERVER_PID" ]; then
         if kill -0 "$SNAPSERVER_PID" 2>/dev/null; then
             log "Stopping snapserver (PID: $SNAPSERVER_PID)"
             kill -TERM "$SNAPSERVER_PID" 2>/dev/null || true
             
             # Wait up to 10 seconds for graceful shutdown
-            local count=0
+            count=0
             while kill -0 "$SNAPSERVER_PID" 2>/dev/null && [ $count -lt 10 ]; do
                 sleep 1
-                ((count++))
+                count=$((count + 1))
             done
             
             # Force kill if still running
@@ -74,7 +74,7 @@ cleanup() {
     fi
     
     # Clean up any temporary files
-    if [[ -n "${OUTPUT_DIR:-}" ]]; then
+    if [ -n "${OUTPUT_DIR:-}" ]; then
         find "$OUTPUT_DIR" -name "tmp_*" -type f -delete 2>/dev/null || true
     fi
 }
@@ -83,17 +83,17 @@ cleanup() {
 # Validate required commands exist
 #######################################
 check_dependencies() {
-    local missing_deps=()
-    local required_commands=("jq" "yt-dlp" "sqlite3" "shuf" "ffmpeg" "snapserver" "wget")
+    missing_deps=""
+    required_commands="jq yt-dlp sqlite3 shuf ffmpeg snapserver wget"
     
-    for cmd in "${required_commands[@]}"; do
+    for cmd in $required_commands; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
-            missing_deps+=("$cmd")
+            missing_deps="$missing_deps $cmd"
         fi
     done
     
-    if [[ ${#missing_deps[@]} -gt 0 ]]; then
-        die "Missing required dependencies: ${missing_deps[*]}"
+    if [ -n "$missing_deps" ]; then
+        die "Missing required dependencies:$missing_deps"
     fi
     
     log "All dependencies found"
@@ -103,7 +103,7 @@ check_dependencies() {
 # Load and validate configuration
 #######################################
 load_config() {
-    [[ -f "$CONFIG_FILE" ]] || die "Config file not found: $CONFIG_FILE"
+    [ -f "$CONFIG_FILE" ] || die "Config file not found: $CONFIG_FILE"
     
     log "Loading configuration from $CONFIG_FILE"
     
@@ -124,23 +124,25 @@ load_config() {
     MAX_CONSECUTIVE_FAILURES=$(jq -r '.max_consecutive_failures // 5' "$CONFIG_FILE")
     
     # Validate required fields
-    local required_fields=("SNAPSERVER_CONFIG" "DB_URL" "DB_FILE" "COOKIES_FILE")
-    for field in "${required_fields[@]}"; do
-        if [[ -z "${!field}" ]]; then
-            die "Required configuration field missing or empty: ${field,,}"
+    required_fields="SNAPSERVER_CONFIG DB_URL DB_FILE COOKIES_FILE"
+    for field in $required_fields; do
+        eval "value=\$$field"
+        if [ -z "$value" ]; then
+            field_lower=$(echo "$field" | tr 'A-Z' 'a-z')
+            die "Required configuration field missing or empty: $field_lower"
         fi
     done
     
     # Validate numeric fields
-    if ! [[ "$MAX_RETRIES" =~ ^[0-9]+$ ]] || [ "$MAX_RETRIES" -lt 1 ]; then
+    if ! echo "$MAX_RETRIES" | grep -q '^[0-9]*$' || [ "$MAX_RETRIES" -lt 1 ]; then
         die "max_retries must be a positive integer"
     fi
     
-    if ! [[ "$SLEEP_INTERVAL" =~ ^[0-9]+$ ]] || [ "$SLEEP_INTERVAL" -lt 1 ]; then
+    if ! echo "$SLEEP_INTERVAL" | grep -q '^[0-9]*$' || [ "$SLEEP_INTERVAL" -lt 1 ]; then
         die "sleep_interval must be a positive integer"
     fi
     
-    if ! [[ "$MAX_CONSECUTIVE_FAILURES" =~ ^[0-9]+$ ]] || [ "$MAX_CONSECUTIVE_FAILURES" -lt 1 ]; then
+    if ! echo "$MAX_CONSECUTIVE_FAILURES" | grep -q '^[0-9]*$' || [ "$MAX_CONSECUTIVE_FAILURES" -lt 1 ]; then
         die "max_consecutive_failures must be a positive integer"
     fi
     
@@ -155,15 +157,15 @@ setup_environment() {
     mkdir -p "$OUTPUT_DIR" || die "Failed to create output directory: $OUTPUT_DIR"
     
     # Check snapserver config
-    if [[ ! -f "$SNAPSERVER_CONFIG" ]]; then
+    if [ ! -f "$SNAPSERVER_CONFIG" ]; then
         log "WARNING: Snapserver config not found: $SNAPSERVER_CONFIG"
     fi
     
     # Check cookies file
-    [[ -f "$COOKIES_FILE" ]] || die "Cookies file not found: $COOKIES_FILE"
+    [ -f "$COOKIES_FILE" ] || die "Cookies file not found: $COOKIES_FILE"
     
     # Check if FIFO exists or can be created
-    if [[ -n "$SNAPFIFO" ]] && [[ ! -p "$SNAPFIFO" ]]; then
+    if [ -n "$SNAPFIFO" ] && [ ! -p "$SNAPFIFO" ]; then
         log "WARNING: FIFO does not exist: $SNAPFIFO"
     fi
     
@@ -174,7 +176,7 @@ setup_environment() {
 # Start snapserver process
 #######################################
 start_snapserver() {
-    if [[ ! -f "$SNAPSERVER_CONFIG" ]]; then
+    if [ ! -f "$SNAPSERVER_CONFIG" ]; then
         log "WARNING: Skipping snapserver start (config not found)"
         return 0
     fi
@@ -204,10 +206,10 @@ start_snapserver() {
 download_database() {
     log "Downloading database from: $DB_URL"
     
-    local retry_count=0
-    local temp_db="${DB_FILE}.tmp"
+    retry_count=0
+    temp_db="${DB_FILE}.tmp"
     
-    while [[ $retry_count -lt $MAX_RETRIES ]]; do
+    while [ $retry_count -lt $MAX_RETRIES ]; do
         if wget "$DB_URL" -O "$temp_db" -q --timeout=30 --tries=1; then
             # Verify the downloaded file is a valid SQLite database
             if sqlite3 "$temp_db" "SELECT COUNT(*) FROM uploads;" >/dev/null 2>&1; then
@@ -220,8 +222,8 @@ download_database() {
             fi
         fi
         
-        ((retry_count++))
-        if [[ $retry_count -lt $MAX_RETRIES ]]; then
+        retry_count=$((retry_count + 1))
+        if [ $retry_count -lt $MAX_RETRIES ]; then
             log "Download attempt $retry_count failed. Retrying in 5 seconds..."
             sleep 5
         fi
@@ -235,32 +237,27 @@ download_database() {
 # Outputs: JSON string of upload data
 #######################################
 get_random_upload() {
-    local count
     count=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM uploads;" 2>/dev/null) || {
         log "Failed to query database"
         return 1
     }
     
-    if [[ "$count" -eq 0 ]]; then
+    if [ "$count" -eq 0 ]; then
         log "No uploads found in database"
         return 1
     fi
     
-    local random_id
     random_id=$(shuf -i 1-"$count" -n 1)
     
-    local upload_json
     upload_json=$(sqlite3 "$DB_FILE" "SELECT upload FROM uploads WHERE upload_id = $random_id;" 2>/dev/null)
     
-    if [[ -z "$upload_json" ]]; then
+    if [ -z "$upload_json" ]; then
         log "Upload with ID $random_id not found"
         return 1
     fi
     
     echo "$upload_json"
 }
-
-
 
 #######################################
 # Download and process audio
@@ -271,39 +268,26 @@ get_random_upload() {
 #   0 on success, 1 on failure
 #######################################
 process_video() {
-    local video_id="$1"
-    local upload_id="$2"
-    local url="https://music.youtube.com/watch?v=$video_id"
+    video_id="$1"
+    upload_id="$2"
+    url="https://music.youtube.com/watch?v=$video_id"
     
     log "Processing Upload ID: $upload_id, Video ID: $video_id"
     
     # Generate random filename
-    local rand_name
     rand_name=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
-    local temp_file="${OUTPUT_DIR}/tmp_${rand_name}"
+    temp_file="${OUTPUT_DIR}/tmp_${rand_name}"
     
-    # Download with yt-dlp
-    local yt_dlp_options=(
-        "--cookies" "$COOKIES_FILE"
-        "--no-playlist"
-        "--extract-flat" "false"
-        "--output" "$temp_file"
-        "--format" "bestaudio/best"
-        "--retries" "3"
-        "--no-warnings"
-        "--quiet"
-    )
-    
-    if ! yt-dlp "${yt_dlp_options[@]}" "$url" 2>/dev/null; then
+    # Download with yt-dlp - ash doesn't support arrays, use string
+    if ! yt-dlp --cookies "$COOKIES_FILE" --no-playlist --extract-flat false --output "$temp_file" --format "bestaudio/best" --retries 3 --no-warnings --quiet "$url" 2>/dev/null; then
         log "Failed to download: $video_id"
         return 1
     fi
     
     # Find the actual downloaded file (yt-dlp adds extension)
-    local actual_file
     actual_file=$(find "$OUTPUT_DIR" -name "tmp_${rand_name}*" -type f | head -n 1)
     
-    if [[ ! -f "$actual_file" ]]; then
+    if [ ! -f "$actual_file" ]; then
         log "Downloaded file not found for: $video_id"
         return 1
     fi
@@ -311,7 +295,7 @@ process_video() {
     log "Successfully downloaded: $video_id"
     
     # Apply loudness normalization and stream to FIFO
-    if [[ -n "$SNAPFIFO" ]] && [[ -p "$SNAPFIFO" ]]; then
+    if [ -n "$SNAPFIFO" ] && [ -p "$SNAPFIFO" ]; then
         normalize_and_stream "$actual_file" "$SNAPFIFO"
     fi
     
@@ -328,23 +312,21 @@ process_video() {
 #   fifo_path - Path to FIFO
 #######################################
 normalize_and_stream() {
-    local input_file="$1"
-    local fifo_path="$2"
+    input_file="$1"
+    fifo_path="$2"
     
     log "Normalizing and streaming audio"
     
     # First pass: measure loudness
-    local json
     json=$(ffmpeg -i "$input_file" -af loudnorm=I=-23:LRA=7:TP=-2:print_format=json -f null - 2>&1 | awk '/^{/,/^}/')
     
-    if [[ -z "$json" ]]; then
+    if [ -z "$json" ]; then
         log "WARNING: Failed to measure loudness, using default normalization"
         ffmpeg -i "$input_file" -af loudnorm=I=-23:LRA=7:TP=-2 -f s16le -ac 2 -ar 44100 "$fifo_path" 2>/dev/null
         return
     fi
     
     # Extract measured values
-    local measured_i measured_tp measured_lra measured_thresh target_offset
     measured_i=$(echo "$json" | jq -r '.input_i // empty')
     measured_tp=$(echo "$json" | jq -r '.input_tp // empty')
     measured_lra=$(echo "$json" | jq -r '.input_lra // empty')
@@ -352,7 +334,7 @@ normalize_and_stream() {
     target_offset=$(echo "$json" | jq -r '.target_offset // empty')
     
     # Second pass: apply normalization
-    if [[ -n "$measured_i" && -n "$measured_tp" && -n "$measured_lra" && -n "$measured_thresh" && -n "$target_offset" ]]; then
+    if [ -n "$measured_i" ] && [ -n "$measured_tp" ] && [ -n "$measured_lra" ] && [ -n "$measured_thresh" ] && [ -n "$target_offset" ]; then
         ffmpeg -i "$input_file" \
             -af "loudnorm=I=-23:LRA=7:TP=-2:measured_I=$measured_i:measured_LRA=$measured_lra:measured_TP=$measured_tp:measured_thresh=$measured_thresh:offset=$target_offset:linear=true" \
             -f s16le -ac 2 -ar 44100 "$fifo_path" 2>/dev/null
@@ -369,7 +351,9 @@ main_loop() {
     log "Starting main processing loop"
     
     while true; do
-        local upload_json video_id upload_id
+        upload_json=""
+        video_id=""
+        upload_id=""
         
         # Get random upload
         if ! upload_json=$(get_random_upload); then
@@ -379,7 +363,7 @@ main_loop() {
         
         # Extract video ID
         video_id=$(echo "$upload_json" | jq -r '.videoId // empty' 2>/dev/null)
-        if [[ -z "$video_id" ]]; then
+        if [ -z "$video_id" ]; then
             log "No videoId found in upload"
             sleep 5
             continue
@@ -389,9 +373,9 @@ main_loop() {
         if process_video "$video_id" "$upload_id"; then
             CONSECUTIVE_FAILURES=0
         else
-            ((CONSECUTIVE_FAILURES++))
+            CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
             
-            if [[ $CONSECUTIVE_FAILURES -ge $MAX_CONSECUTIVE_FAILURES ]]; then
+            if [ $CONSECUTIVE_FAILURES -ge $MAX_CONSECUTIVE_FAILURES ]; then
                 die "Too many consecutive download failures ($CONSECUTIVE_FAILURES)"
             fi
         fi
@@ -423,6 +407,6 @@ main() {
 }
 
 # Run main function if script is executed directly
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+if [ "$0" = "${0%/*}/$(basename "$0")" ]; then
     main "$@"
 fi
