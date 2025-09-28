@@ -314,26 +314,16 @@ stream_audio() {
     input_file="$1"
     fifo_path="$2"
     
-    log "Streaming audio"
-
-    ffmpeg-normalize "$input_file" -o "${input_file}.flac" \
-        -c:a flac \
-        --normalization-type ebu \
-        --target-level -14 \
-        --print-stats
-    # Convert to PCM format and stream to FIFO
-    # -y: overwrite output without asking
-    # -f s16le: signed 16-bit little-endian PCM format
-    # -acodec pcm_s16le: use PCM signed 16-bit little-endian codec
-    # -ac 2: stereo (2 channels)
-    # -ar 44100: 44.1kHz sample rate
-    if ! ffmpeg -y -i "${input_file}.flac" -f s16le -acodec pcm_s16le -ac 2 -ar 44100 "$fifo_path" 2>&1; then
+    log "Streaming audio with loudnorm"
+    
+    if ! ffmpeg -y -i "$input_file" \
+        -af "loudnorm=I=-16:TP=-1.0:LRA=11" \
+        -f s16le -acodec pcm_s16le -ac 2 -ar 44100 "$fifo_path" 2>/dev/null; then
         log "WARNING: Failed to convert audio file: $(basename "$input_file")"
         return 1
     fi
     
-    log "Successfully streamed audio to FIFO"
-    rm -f "${input_file}.flac"
+    log "Successfully streamed normalized audio to FIFO"
     return 0
 }
 
