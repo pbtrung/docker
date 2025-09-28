@@ -279,7 +279,7 @@ process_video() {
     temp_file="${OUTPUT_DIR}/tmp_${rand_name}"
     
     # Download with yt-dlp - ash doesn't support arrays, use string
-    if ! yt-dlp --cookies "$COOKIES_FILE" --no-playlist --extract-flat false --output "$temp_file" --format "bestaudio/best" --retries 3 --no-warnings --quiet "$url" 2>/dev/null; then
+    if ! yt-dlp --cookies "$COOKIES_FILE" --no-playlist --output "$temp_file" "$url" 2>&1; then
         log "Failed to download: $video_id"
         return 1
     fi
