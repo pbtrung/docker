@@ -1,9 +1,7 @@
 #!/bin/ash
 
-# Music streaming script with YouTube Music integration
-# Improved version with better error handling, logging, and maintainability
-
-set -eu  # Exit on error, undefined vars (ash doesn't support pipefail)
+# Exit on error
+set -eu
 
 # Configuration
 readonly CONFIG_FILE="${MUSIC_CONFIG_FILE:-/music/config.json}"
@@ -25,21 +23,12 @@ MAX_RETRIES=""
 SLEEP_INTERVAL=""
 MAX_CONSECUTIVE_FAILURES=""
 
-#######################################
-# Log message with timestamp
-# Arguments:
-#   Message to log
-#######################################
+# Log with timestamp
 log() {
     echo "[$(date +"$LOG_FORMAT")] [$SCRIPT_NAME] $*" >&2
 }
 
-#######################################
 # Log error and exit
-# Arguments:
-#   Error message
-#   Exit code (optional, default: 1)
-#######################################
 die() {
     local msg="$1"
     local code="${2:-1}"
@@ -47,9 +36,7 @@ die() {
     exit "$code"
 }
 
-#######################################
-# Cleanup resources on exit
-#######################################
+# Cleanup on exit
 cleanup() {
     log "Cleaning up..."
     
@@ -73,15 +60,13 @@ cleanup() {
         fi
     fi
     
-    # Clean up any temporary files
+    # Clean up temp files
     if [ -n "${OUTPUT_DIR:-}" ]; then
-        find "$OUTPUT_DIR" -name "tmp_*" -type f -delete 2>/dev/null || true
+        find "$OUTPUT_DIR" -type f -delete 2>/dev/null || true
     fi
 }
 
-#######################################
-# Validate required commands exist
-#######################################
+# Check dependencies
 check_dependencies() {
     missing_deps=""
     required_commands="jq yt-dlp sqlite3 shuf ffmpeg snapserver wget"
@@ -99,9 +84,7 @@ check_dependencies() {
     log "All dependencies found"
 }
 
-#######################################
-# Load and validate configuration
-#######################################
+# Load config
 load_config() {
     [ -f "$CONFIG_FILE" ] || die "Config file not found: $CONFIG_FILE"
     
@@ -149,22 +132,16 @@ load_config() {
     log "Configuration loaded successfully"
 }
 
-#######################################
-# Setup directories and files
-#######################################
+# Setup dirs/files
 setup_environment() {
-    # Create output directory
     mkdir -p "$OUTPUT_DIR" || die "Failed to create output directory: $OUTPUT_DIR"
     
-    # Check snapserver config
     if [ ! -f "$SNAPSERVER_CONFIG" ]; then
         log "WARNING: Snapserver config not found: $SNAPSERVER_CONFIG"
     fi
     
-    # Check cookies file
     [ -f "$COOKIES_FILE" ] || die "Cookies file not found: $COOKIES_FILE"
     
-    # Check if FIFO exists or can be created
     if [ -n "$SNAPFIFO" ] && [ ! -p "$SNAPFIFO" ]; then
         log "WARNING: FIFO does not exist: $SNAPFIFO"
     fi
@@ -172,9 +149,7 @@ setup_environment() {
     log "Environment setup complete"
 }
 
-#######################################
-# Start snapserver process
-#######################################
+# Start snapserver
 start_snapserver() {
     if [ ! -f "$SNAPSERVER_CONFIG" ]; then
         log "WARNING: Skipping snapserver start (config not found)"
@@ -187,7 +162,6 @@ start_snapserver() {
         SNAPSERVER_PID=$!
         log "Snapserver started with PID: $SNAPSERVER_PID"
         
-        # Wait a moment and verify it's still running
         sleep 2
         if ! kill -0 "$SNAPSERVER_PID" 2>/dev/null; then
             log "WARNING: Snapserver appears to have exited immediately"
@@ -200,9 +174,7 @@ start_snapserver() {
     fi
 }
 
-#######################################
-# Download database with retry logic
-#######################################
+# Download DB with retry
 download_database() {
     log "Downloading database from: $DB_URL"
     
@@ -211,7 +183,7 @@ download_database() {
     
     while [ $retry_count -lt $MAX_RETRIES ]; do
         if wget "$DB_URL" -O "$temp_db" -q --timeout=30 --tries=1; then
-            # Verify the downloaded file is a valid SQLite database
+            # Verify valid SQLite DB
             if sqlite3 "$temp_db" "SELECT COUNT(*) FROM uploads;" >/dev/null 2>&1; then
                 mv "$temp_db" "$DB_FILE" || die "Failed to move database file"
                 log "Database downloaded and verified successfully"
@@ -232,10 +204,7 @@ download_database() {
     die "Failed to download database after $MAX_RETRIES attempts"
 }
 
-#######################################
-# Get random upload from database
-# Outputs: JSON string of upload data
-#######################################
+# Get random upload from DB
 get_random_upload() {
     count=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM uploads;" 2>/dev/null) || {
         log "Failed to query database"
@@ -245,6 +214,8 @@ get_random_upload() {
     if [ "$count" -eq 0 ]; then
         log "No uploads found in database"
         return 1
+    else
+        log "Number of uploads: $count"
     fi
     
     random_id=$(shuf -i 1-"$count" -n 1)
@@ -254,37 +225,32 @@ get_random_upload() {
     if [ -z "$upload_json" ]; then
         log "Upload with ID $random_id not found"
         return 1
+    else
+        log "Got upload_id: $random_id"
     fi
     
     echo "$upload_json"
 }
 
-#######################################
-# Download and process audio
-# Arguments:
-#   video_id - YouTube video ID
-#   upload_id - Database upload ID
-# Returns:
-#   0 on success, 1 on failure
-#######################################
+# Download and process video
 process_video() {
     video_id="$1"
     url="https://music.youtube.com/watch?v=$video_id"
     
     log "Processing Video ID: $video_id"
     
-    # Generate random filename
+    # Random filename
     rand_name=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
     temp_file="${OUTPUT_DIR}/${rand_name}"
     
-    # Download with yt-dlp - ash doesn't support arrays, use string
+    # Download with yt-dlp
     if ! yt-dlp --cookies "$COOKIES_FILE" --no-playlist --output "${temp_file}.%(ext)s" "$url" 2>&1; then
         log "Failed to download: $video_id"
         return 1
     fi
     
-    # Find the actual downloaded file (yt-dlp adds extension)
-    actual_file=$(find "$OUTPUT_DIR" -name "${rand_name}*" -type f | head -n 1)
+    # Find downloaded file
+    actual_file=$(find "$OUTPUT_DIR" -iname "${rand_name}*" -type f | head -n 1)
     
     if [ ! -f "$actual_file" ]; then
         log "Downloaded file not found for: $video_id"
@@ -293,23 +259,17 @@ process_video() {
     
     log "Successfully downloaded: $video_id"
     
-    # Apply loudness normalization and stream to FIFO
+    # Stream to FIFO
     if [ -n "$SNAPFIFO" ] && [ -p "$SNAPFIFO" ]; then
         stream_audio "$actual_file" "$SNAPFIFO"
     fi
     
-    # Clean up temporary file
     rm -f "$actual_file"
     
     return 0
 }
 
-#######################################
-# Apply loudness normalization and stream to FIFO
-# Arguments:
-#   input_file - Path to audio file
-#   fifo_path - Path to FIFO
-#######################################
+# Stream audio to FIFO
 stream_audio() {
     input_file="$1"
     fifo_path="$2"
@@ -322,13 +282,11 @@ stream_audio() {
         return 1
     fi
     
-    log "Successfully streamed normalized audio to FIFO"
+    log "Successfully streamed audio to FIFO"
     return 0
 }
 
-#######################################
-# Main processing loop
-#######################################
+# Main loop
 main_loop() {
     log "Starting main processing loop"
     
@@ -339,7 +297,7 @@ main_loop() {
         
         # Get random upload
         if ! upload_json=$(get_random_upload); then
-            sleep 30
+            sleep 5
             continue
         fi
         
@@ -351,14 +309,16 @@ main_loop() {
             continue
         fi
         
-        # Process the video
+        # Process video
         if process_video "$video_id"; then
             CONSECUTIVE_FAILURES=0
         else
             CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
             
             if [ $CONSECUTIVE_FAILURES -ge $MAX_CONSECUTIVE_FAILURES ]; then
-                die "Too many consecutive download failures ($CONSECUTIVE_FAILURES)"
+                log "Too many consecutive download failures ($CONSECUTIVE_FAILURES)"
+                sleep 5
+                continue
             fi
         fi
         
@@ -366,29 +326,23 @@ main_loop() {
     done
 }
 
-#######################################
-# Main function
-#######################################
+# Main
 main() {
     log "Starting $SCRIPT_NAME"
     
-    # Set up signal handling
     trap cleanup INT TERM EXIT
     
-    # Initialize
     check_dependencies
     load_config
     setup_environment
     
-    # Start services
     start_snapserver
     download_database
     
-    # Run main loop
     main_loop
 }
 
-# Run main function if script is executed directly
+# Run if executed directly
 if [ "$0" = "${0%/*}/$(basename "$0")" ]; then
     main "$@"
 fi
