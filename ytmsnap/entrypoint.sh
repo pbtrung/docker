@@ -277,7 +277,7 @@ stream_audio() {
     log "Streaming audio"
     
     if ! ffmpeg -y -i "$input_file" \
-        -af "dynaudnorm=f=500:g=31:p=0.90:m=3:s=12:r=0.25" \
+        -af "dynaudnorm=f=500:g=31:p=0.925:m=8:r=0.35" \
         -f s16le -acodec pcm_s16le -ac 2 -ar 44100 "$fifo_path" 2>/dev/null; then
         log "WARNING: Failed to convert audio file: $(basename "$input_file")"
         return 1
