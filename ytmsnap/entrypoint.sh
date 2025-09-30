@@ -218,7 +218,7 @@ process_video() {
     
     log "Processing Video ID: $video_id"
     
-    rand_name=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
+    rand_name=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 25 | head -n 1)
     temp_file="${OUTPUT_DIR}/${rand_name}"
     
     if ! yt-dlp --cookies "$COOKIES_FILE" --no-playlist --output "${temp_file}.%(ext)s" "$url" 2>&1; then
@@ -278,25 +278,37 @@ stream_audio() {
     local input_file="$1"
     local fifo_path="$2"
     local title="$3"
-    local infopipe="/tmp/infopipe"
+    local infopipe="/tmp/infopipe.$$"
     local gwsocket_pid=""
     
     log "Streaming: $(basename "$input_file")"
     
+    rm -f "$infopipe"
     mkfifo "$infopipe" || {
         log "WARNING: Failed to create info pipe"
         return 1
     }
     
-    gwsocket --port=9000 --addr=0.0.0.0 --std < "$infopipe" &
+    (gwsocket --port=9000 --addr=0.0.0.0 --std < "$infopipe") &
     gwsocket_pid=$!
     
-    ffmpeg -hide_banner -y -i "$input_file" \
+    sleep 0.5
+    
+    (ffmpeg -hide_banner -y -i "$input_file" \
         -af "dynaudnorm=f=500:g=31:p=0.925:m=8:r=0.25:s=25.0" \
         -f s16le -acodec pcm_s16le -ac 2 -ar 44100 \
-        "$fifo_path" 2>&1 | show_ffmpeg_progress "$title" > "$infopipe"
+        "$fifo_path" 2>&1 | show_ffmpeg_progress "$title" > "$infopipe") &
     
+    local ffmpeg_pid=$!
+    
+    wait "$ffmpeg_pid"
     local exit_code=$?
+    
+    exec 3>"$infopipe"
+    echo "" >&3
+    exec 3>&-
+    
+    sleep 0.5
     
     if [ -n "$gwsocket_pid" ] && kill -0 "$gwsocket_pid" 2>/dev/null; then
         kill -TERM "$gwsocket_pid" 2>/dev/null || true
