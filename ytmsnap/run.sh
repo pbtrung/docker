@@ -246,30 +246,44 @@ process_video() {
 
 show_ffmpeg_progress() {
     local title="$1"
-    stdbuf -oL awk -v title="$title" '
-        /Duration:/ {
-            dur = $2
-            sub(/,/, "", dur)
-            split(dur, parts, ":")
-            dur_secs = parts[1]*3600 + parts[2]*60 + parts[3]
-        }
-        /time=/ {
-            match($0, /time=([0-9:.]+)/, time_match)
-            if (time_match[1]) {
-                split(time_match[1], parts, ":")
-                curr_secs = parts[1]*3600 + parts[2]*60 + parts[3]
-                curr_secs_int = int(curr_secs)
-                
-                if (curr_secs_int > last_secs) {
-                    last_secs = curr_secs_int
-                    pct = (dur_secs > 0) ? (curr_secs / dur_secs * 100) : 0
-                    printf "\r%s\n\r[%s/%s] %.1f%%", title, time_match[1], dur, pct
-                    fflush()
-                }
+    local dur_secs="$2"
+
+    awk -v title="$title" -v dur_secs="$dur_secs" '
+        BEGIN {
+            last_secs = -1
+            dur = ""
+            if (dur_secs > 0) {
+                h = int(dur_secs / 3600)
+                m = int((dur_secs % 3600) / 60)
+                s = dur_secs % 60
+                dur = sprintf("%02d:%02d:%02d", h, m, s)
             }
         }
-        END {
-            printf "\n"
+        /^out_time_ms=/ {
+            sub(/out_time_ms=/, "")
+            secs = int($0 / 1000000)
+            if (secs > last_secs) {
+                last_secs = secs
+                h = int(secs / 3600)
+                m = int((secs % 3600) / 60)
+                s = secs % 60
+                curr_time = sprintf("%02d:%02d:%02d", h, m, s)
+
+                if (dur_secs > 0) {
+                    pct = (secs / dur_secs) * 100
+                    if (pct > 100) pct = 100
+                    printf "\r[%s] -- [%s/%s] [%3.1f%%]", title, curr_time, dur, pct
+                } else {
+                    printf "\r[%s] -- [%s]", title, curr_time
+                }
+                fflush()
+            }
+        }
+        /^progress=end$/ {
+            if (dur_secs > 0) {
+                printf "\r[%s] -- [%s/%s] [100.0%%]", title, dur, dur
+            }
+            print ""   # final newline
         }
     '
 }
@@ -282,7 +296,12 @@ stream_audio() {
     local gwsocket_pid=""
     
     log "Streaming: $(basename "$input_file")"
-    
+
+    local dur_secs=0
+    dur_secs=$(ffprobe -v error -show_entries format=duration \
+        -of default=noprint_wrappers=1:nokey=1 "$input_file" 2>/dev/null | cut -d. -f1)
+    [ -z "$dur_secs" ] && dur_secs=0
+
     rm -f "$infopipe"
     mkfifo "$infopipe" || {
         log "WARNING: Failed to create info pipe"
@@ -294,27 +313,22 @@ stream_audio() {
     
     sleep 0.5
     
-    (ffmpeg -hide_banner -y -i "$input_file" \
+    (ffmpeg -hide_banner -progress pipe:2 -y -i "$input_file" \
         -af "dynaudnorm=f=500:g=31:p=0.925:m=8:r=0.25:s=25.0" \
         -f s16le -acodec pcm_s16le -ac 2 -ar 44100 \
-        "$fifo_path" 2>&1 | show_ffmpeg_progress "$title" > "$infopipe") &
+        "$fifo_path" 2>&1 | show_ffmpeg_progress "$title" "$dur_secs" > "$infopipe") &
     
     local ffmpeg_pid=$!
     
     wait "$ffmpeg_pid"
     local exit_code=$?
     
-    exec 3>"$infopipe"
-    echo "" >&3
-    exec 3>&-
-    
+    echo "END" > "$infopipe" || true
     sleep 0.5
-    
     if [ -n "$gwsocket_pid" ] && kill -0 "$gwsocket_pid" 2>/dev/null; then
         kill -TERM "$gwsocket_pid" 2>/dev/null || true
         wait "$gwsocket_pid" 2>/dev/null || true
     fi
-    
     rm -f "$infopipe"
     
     if [ $exit_code -ne 0 ]; then
