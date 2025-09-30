@@ -246,7 +246,7 @@ process_video() {
 
 show_ffmpeg_progress() {
     local title="$1"
-    awk -v title="$title" '
+    stdbuf -oL awk -v title="$title" '
         /Duration:/ {
             dur = $2
             sub(/,/, "", dur)
@@ -297,7 +297,7 @@ stream_audio() {
     (ffmpeg -hide_banner -y -i "$input_file" \
         -af "dynaudnorm=f=500:g=31:p=0.925:m=8:r=0.25:s=25.0" \
         -f s16le -acodec pcm_s16le -ac 2 -ar 44100 \
-        "$fifo_path" 2>&1 | show_ffmpeg_progress "$title") &
+        "$fifo_path" 2>&1 | show_ffmpeg_progress "$title" > "$infopipe") &
     
     local ffmpeg_pid=$!
     
