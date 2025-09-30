@@ -297,7 +297,7 @@ stream_audio() {
     (ffmpeg -hide_banner -y -i "$input_file" \
         -af "dynaudnorm=f=500:g=31:p=0.925:m=8:r=0.25:s=25.0" \
         -f s16le -acodec pcm_s16le -ac 2 -ar 44100 \
-        "$fifo_path" 2>&1 | show_ffmpeg_progress "$title" > "$infopipe") &
+        "$fifo_path" 2>&1 | show_ffmpeg_progress "$title") &
     
     local ffmpeg_pid=$!
     
