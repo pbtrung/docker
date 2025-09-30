@@ -245,8 +245,28 @@ process_video() {
 }
 
 show_ffmpeg_progress() {
-    local title="$1"
+    local full="$1"
     local dur_secs="$2"
+    local maxlen=60
+
+    local title="-----"
+    if [ -n "$full" ]; then
+        local dir base
+        dir=$(dirname -- "$full")
+        base=$(basename -- "$full")
+
+        if [ "$dir" = "." ] || [ -z "$dir" ]; then
+            title="$base"
+        else
+            if [ ${#dir} -gt $maxlen ]; then
+                local keep=$(( (maxlen - 3) / 2 ))
+                local left=${dir:0:$keep}
+                local right=${dir: -$keep}
+                dir="${left}...${right}"
+            fi
+            title="$dir/$base"
+        fi
+    fi
 
     awk -v title="$title" -v dur_secs="$dur_secs" '
         BEGIN {
@@ -258,6 +278,8 @@ show_ffmpeg_progress() {
                 s = dur_secs % 60
                 dur = sprintf("%02d:%02d:%02d", h, m, s)
             }
+            print ""
+            print ""
         }
         /^out_time_ms=/ {
             sub(/out_time_ms=/, "")
@@ -269,21 +291,22 @@ show_ffmpeg_progress() {
                 s = secs % 60
                 curr_time = sprintf("%02d:%02d:%02d", h, m, s)
 
+                printf "\033[F\033[F\033[K%s\n", title
                 if (dur_secs > 0) {
                     pct = (secs / dur_secs) * 100
                     if (pct > 100) pct = 100
-                    printf "\r[%s] -- [%s/%s] [%3.1f%%]", title, curr_time, dur, pct
+                    printf "\033[K[%s/%s] [%4.1f%%]\n", curr_time, dur, pct
                 } else {
-                    printf "\r[%s] -- [%s]", title, curr_time
+                    printf "\033[K[%s]\n", curr_time
                 }
                 fflush()
             }
         }
         /^progress=end$/ {
+            printf "\033[F\033[F\033[K%s\n", title
             if (dur_secs > 0) {
-                printf "\r[%s] -- [%s/%s] [100.0%%]", title, dur, dur
+                printf "\033[K[%s/%s] [100.0%%]\n", dur, dur
             }
-            print ""   # final newline
         }
     '
 }
