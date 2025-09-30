@@ -247,7 +247,7 @@ process_video() {
 show_ffmpeg_progress() {
     local full="$1"
     local dur_secs="$2"
-    local maxlen=60
+    local maxlen=50
 
     local title="-----"
     if [ -n "$full" ]; then
@@ -278,8 +278,6 @@ show_ffmpeg_progress() {
                 s = dur_secs % 60
                 dur = sprintf("%02d:%02d:%02d", h, m, s)
             }
-            print ""
-            print ""
         }
         /^out_time_ms=/ {
             sub(/out_time_ms=/, "")
@@ -291,22 +289,21 @@ show_ffmpeg_progress() {
                 s = secs % 60
                 curr_time = sprintf("%02d:%02d:%02d", h, m, s)
 
-                printf "\033[F\033[F\033[K%s\n", title
                 if (dur_secs > 0) {
                     pct = (secs / dur_secs) * 100
                     if (pct > 100) pct = 100
-                    printf "\033[K[%s/%s] [%4.1f%%]\n", curr_time, dur, pct
+                    printf "\r[%s] [%s/%s] [%4.1f%%]", title, curr_time, dur, pct
                 } else {
-                    printf "\033[K[%s]\n", curr_time
+                    printf "\r[%s] [%s]", title, curr_time
                 }
                 fflush()
             }
         }
         /^progress=end$/ {
-            printf "\033[F\033[F\033[K%s\n", title
             if (dur_secs > 0) {
-                printf "\033[K[%s/%s] [100.0%%]\n", dur, dur
+                printf "\r[%s] [%s/%s] [100.0%%]", title, dur, dur
             }
+            print ""   # final newline
         }
     '
 }
