@@ -1,18 +1,14 @@
 #!/bin/ash
 
-# Exit on error
 set -eu
 
-# Configuration
 readonly CONFIG_FILE="${MUSIC_CONFIG_FILE:-/music/config.json}"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly LOG_FORMAT="[%Y-%m-%d %H:%M:%S]"
 
-# Global variables
 SNAPSERVER_PID=""
 CONSECUTIVE_FAILURES=0
 
-# Configuration variables (set from config file)
 SNAPSERVER_CONFIG=""
 SNAPFIFO=""
 DB_URL=""
@@ -23,12 +19,10 @@ MAX_RETRIES=""
 SLEEP_INTERVAL=""
 MAX_CONSECUTIVE_FAILURES=""
 
-# Log with timestamp
 log() {
     echo "[$(date +"$LOG_FORMAT")] [$SCRIPT_NAME] $*" >&2
 }
 
-# Log error and exit
 die() {
     local msg="$1"
     local code="${2:-1}"
@@ -36,7 +30,6 @@ die() {
     exit "$code"
 }
 
-# Cleanup on exit
 cleanup() {
     log "Cleaning up..."
     
@@ -45,14 +38,12 @@ cleanup() {
             log "Stopping snapserver (PID: $SNAPSERVER_PID)"
             kill -TERM "$SNAPSERVER_PID" 2>/dev/null || true
             
-            # Wait up to 10 seconds for graceful shutdown
             count=0
             while kill -0 "$SNAPSERVER_PID" 2>/dev/null && [ $count -lt 10 ]; do
                 sleep 1
                 count=$((count + 1))
             done
             
-            # Force kill if still running
             if kill -0 "$SNAPSERVER_PID" 2>/dev/null; then
                 log "Force killing snapserver"
                 kill -KILL "$SNAPSERVER_PID" 2>/dev/null || true
@@ -60,13 +51,11 @@ cleanup() {
         fi
     fi
     
-    # Clean up temp files
     if [ -n "${OUTPUT_DIR:-}" ]; then
         find "$OUTPUT_DIR" -type f -delete 2>/dev/null || true
     fi
 }
 
-# Check dependencies
 check_dependencies() {
     missing_deps=""
     required_commands="jq yt-dlp sqlite3 shuf ffmpeg snapserver wget"
@@ -84,18 +73,15 @@ check_dependencies() {
     log "All dependencies found"
 }
 
-# Load config
 load_config() {
     [ -f "$CONFIG_FILE" ] || die "Config file not found: $CONFIG_FILE"
     
     log "Loading configuration from $CONFIG_FILE"
     
-    # Validate JSON syntax
     if ! jq empty "$CONFIG_FILE" 2>/dev/null; then
         die "Invalid JSON in config file: $CONFIG_FILE"
     fi
     
-    # Load configuration with defaults
     SNAPSERVER_CONFIG=$(jq -r '.snapserver_config // empty' "$CONFIG_FILE")
     SNAPFIFO=$(jq -r '.snapfifo // empty' "$CONFIG_FILE")
     DB_URL=$(jq -r '.db_url // empty' "$CONFIG_FILE")
@@ -106,7 +92,6 @@ load_config() {
     SLEEP_INTERVAL=$(jq -r '.sleep_interval // 1' "$CONFIG_FILE")
     MAX_CONSECUTIVE_FAILURES=$(jq -r '.max_consecutive_failures // 5' "$CONFIG_FILE")
     
-    # Validate required fields
     required_fields="SNAPSERVER_CONFIG DB_URL DB_FILE COOKIES_FILE"
     for field in $required_fields; do
         eval "value=\$$field"
@@ -116,7 +101,6 @@ load_config() {
         fi
     done
     
-    # Validate numeric fields
     if ! echo "$MAX_RETRIES" | grep -q '^[0-9]*$' || [ "$MAX_RETRIES" -lt 1 ]; then
         die "max_retries must be a positive integer"
     fi
@@ -132,7 +116,6 @@ load_config() {
     log "Configuration loaded successfully"
 }
 
-# Setup dirs/files
 setup_environment() {
     mkdir -p "$OUTPUT_DIR" || die "Failed to create output directory: $OUTPUT_DIR"
     
@@ -149,7 +132,6 @@ setup_environment() {
     log "Environment setup complete"
 }
 
-# Start snapserver
 start_snapserver() {
     if [ ! -f "$SNAPSERVER_CONFIG" ]; then
         log "WARNING: Skipping snapserver start (config not found)"
@@ -174,7 +156,6 @@ start_snapserver() {
     fi
 }
 
-# Download DB with retry
 download_database() {
     log "Downloading database from: $DB_URL"
     
@@ -183,7 +164,6 @@ download_database() {
     
     while [ $retry_count -lt $MAX_RETRIES ]; do
         if wget "$DB_URL" -O "$temp_db" -q --timeout=30 --tries=1; then
-            # Verify valid SQLite DB
             if sqlite3 "$temp_db" "SELECT COUNT(*) FROM uploads;" >/dev/null 2>&1; then
                 mv "$temp_db" "$DB_FILE" || die "Failed to move database file"
                 log "Database downloaded and verified successfully"
@@ -204,7 +184,6 @@ download_database() {
     die "Failed to download database after $MAX_RETRIES attempts"
 }
 
-# Get random upload from DB
 get_random_upload() {
     count=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM uploads;" 2>/dev/null) || {
         log "Failed to query database"
@@ -232,24 +211,21 @@ get_random_upload() {
     echo "$upload_json"
 }
 
-# Download and process video
 process_video() {
-    video_id="$1"
-    url="https://music.youtube.com/watch?v=$video_id"
+    local video_id="$1"
+    local title="$2"
+    local url="https://music.youtube.com/watch?v=$video_id"
     
     log "Processing Video ID: $video_id"
     
-    # Random filename
     rand_name=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
     temp_file="${OUTPUT_DIR}/${rand_name}"
     
-    # Download with yt-dlp
     if ! yt-dlp --cookies "$COOKIES_FILE" --no-playlist --output "${temp_file}.%(ext)s" "$url" 2>&1; then
         log "Failed to download: $video_id"
         return 1
     fi
     
-    # Find downloaded file
     actual_file=$(find "$OUTPUT_DIR" -iname "${rand_name}*" -type f | head -n 1)
     
     if [ ! -f "$actual_file" ]; then
@@ -259,9 +235,8 @@ process_video() {
     
     log "Successfully downloaded: $video_id"
     
-    # Stream to FIFO
     if [ -n "$SNAPFIFO" ] && [ -p "$SNAPFIFO" ]; then
-        stream_audio "$actual_file" "$SNAPFIFO"
+        stream_audio "$actual_file" "$SNAPFIFO" "$title"
     fi
     
     rm -f "$actual_file"
@@ -269,49 +244,99 @@ process_video() {
     return 0
 }
 
-# Stream audio to FIFO
+show_ffmpeg_progress() {
+    local title="$1"
+    awk -v title="$title" '
+        /Duration:/ {
+            dur = $2
+            sub(/,/, "", dur)
+            split(dur, parts, ":")
+            dur_secs = parts[1]*3600 + parts[2]*60 + parts[3]
+        }
+        /time=/ {
+            match($0, /time=([0-9:.]+)/, time_match)
+            if (time_match[1]) {
+                split(time_match[1], parts, ":")
+                curr_secs = parts[1]*3600 + parts[2]*60 + parts[3]
+                curr_secs_int = int(curr_secs)
+                
+                if (curr_secs_int > last_secs) {
+                    last_secs = curr_secs_int
+                    pct = (dur_secs > 0) ? (curr_secs / dur_secs * 100) : 0
+                    printf "\r%s\n\r[%s/%s] %.1f%%", title, time_match[1], dur, pct
+                    fflush()
+                }
+            }
+        }
+        END {
+            printf "\n"
+        }
+    '
+}
+
 stream_audio() {
-    input_file="$1"
-    fifo_path="$2"
+    local input_file="$1"
+    local fifo_path="$2"
+    local title="$3"
+    local infopipe="/tmp/infopipe"
+    local gwsocket_pid=""
     
-    log "Streaming audio"
+    log "Streaming: $(basename "$input_file")"
     
-    if ! ffmpeg -y -i "$input_file" \
-        -af "dynaudnorm=f=500:g=31:p=0.925:m=8:r=0.35:s=26.0" \
-        -f s16le -acodec pcm_s16le -ac 2 -ar 44100 "$fifo_path" 2>/dev/null; then
-        log "WARNING: Failed to convert audio file: $(basename "$input_file")"
+    mkfifo "$infopipe" || {
+        log "WARNING: Failed to create info pipe"
+        return 1
+    }
+    
+    gwsocket --port=9000 --addr=0.0.0.0 --std < "$infopipe" &
+    gwsocket_pid=$!
+    
+    ffmpeg -hide_banner -y -i "$input_file" \
+        -af "dynaudnorm=f=500:g=31:p=0.925:m=8:r=0.25:s=25.0" \
+        -f s16le -acodec pcm_s16le -ac 2 -ar 44100 \
+        "$fifo_path" 2>&1 | show_ffmpeg_progress "$title" > "$infopipe"
+    
+    local exit_code=$?
+    
+    if [ -n "$gwsocket_pid" ] && kill -0 "$gwsocket_pid" 2>/dev/null; then
+        kill -TERM "$gwsocket_pid" 2>/dev/null || true
+        wait "$gwsocket_pid" 2>/dev/null || true
+    fi
+    
+    rm -f "$infopipe"
+    
+    if [ $exit_code -ne 0 ]; then
+        log "WARNING: Failed to stream audio (exit code: $exit_code)"
         return 1
     fi
     
-    log "Successfully streamed audio to FIFO"
+    log "Stream completed successfully"
     return 0
 }
 
-# Main loop
 main_loop() {
     log "Starting main processing loop"
     
     while true; do
         upload_json=""
         video_id=""
-        upload_id=""
+        title=""
         
-        # Get random upload
         if ! upload_json=$(get_random_upload); then
             sleep 5
             continue
         fi
         
-        # Extract video ID
         video_id=$(echo "$upload_json" | jq -r '.videoId // empty' 2>/dev/null)
         if [ -z "$video_id" ]; then
             log "No videoId found in upload"
             sleep 5
             continue
         fi
+
+        title=$(echo "$upload_json" | jq -r '.title // empty' 2>/dev/null)
         
-        # Process video
-        if process_video "$video_id"; then
+        if process_video "$video_id" "$title"; then
             CONSECUTIVE_FAILURES=0
         else
             CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
@@ -327,7 +352,6 @@ main_loop() {
     done
 }
 
-# Main
 main() {
     log "Starting $SCRIPT_NAME"
     
@@ -343,7 +367,6 @@ main() {
     main_loop
 }
 
-# Run if executed directly
 if [ "$0" = "${0%/*}/$(basename "$0")" ]; then
     main "$@"
 fi
