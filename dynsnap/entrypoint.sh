@@ -16,6 +16,7 @@ while true; do
     rclone --config /music/rclone.conf copy $first $fullname -v --stats 5s
     dynaudnorm --input-bits 16 --input-chan 2 --input-rate 48000 \
         -f 500 -g 31 -p 0.95 -m 8 -r 0.22 -s 25.0 \
+        -d libopusfile -t raw \
         -i $fullname -o /tmp/snapfifo
     rm -f $fullname
 
