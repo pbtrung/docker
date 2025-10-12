@@ -14,7 +14,9 @@ while true; do
     fullname="/music/downloads/$fname"
 
     rclone --config /music/rclone.conf copy $first $fullname -v --stats 5s
-    dynaudnorm --input-bits 16 --input-chan 2 --input-rate 48000 -i $fullname -o /tmp/snapfifo
+    dynaudnorm --input-bits 16 --input-chan 2 --input-rate 48000 \
+        -f 500 -g 31 -p 0.95 -m 8 -r 0.22 -s 25.0 \
+        -i $fullname -o /tmp/snapfifo
     rm -f $fullname
 
     sleep 1
