@@ -9,7 +9,8 @@ while true; do
     line=$(shuf -n 1 /music/db01.txt)
     first=$(echo "$line" | cut -d',' -f1)
     second=$(echo "$line" | cut -d',' -f2)
-    fname=${first##*/}
+    binname=${first##*/}
+    fname="${binname%.bin}.opus"
     fullname="/music/downloads/$fname"
 
     rclone --config /music/rclone.conf copy $first $fullname -v --stats 5s
