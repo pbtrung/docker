@@ -13,10 +13,13 @@ while true; do
     fullname="/music/downloads/$fname"
 
     rclone --config /music/rclone.conf copy $first /music/downloads/ -v --stats 5s
-    opusdec $fullname --rate 48000 - | \
-        ffmpeg -y -i - -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
-        -f s16le -acodec pcm_s16le -ac 2 -ar 48000 /tmp/snapfifo
-    rm -f $fullname
+    opusdec "$fullname" --rate 48000 - | \
+    ffmpeg -y \
+      -f s16le -ac 2 -ar 48000 -i - \
+      -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
+      -f s16le -acodec pcm_s16le -ac 2 -ar 48000 /tmp/snapfifo \
+      -hide_banner -loglevel error
+    rm -f "$fullname"
 
     sleep 1
 done
