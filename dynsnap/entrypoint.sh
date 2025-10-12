@@ -13,9 +13,10 @@ while true; do
     fullname="/music/downloads/$fname"
 
     rclone --config /music/rclone.conf copy $first /music/downloads/ -v --stats 5s
-    dynaudnorm -f 500 -g 31 -p 0.95 -m 8 -r 0.22 -s 25.0 \
-        -d libopusfile -t raw \
-        -i $fullname -o /tmp/snapfifo
+    # dynaudnorm -f 500 -g 31 -p 0.95 -m 8 -r 0.22 -s 25.0 \
+    #     -d libopusfile -t raw \
+    #     -i $fullname -o /tmp/snapfifo
+    opusdec $fullname --rate 48000 --gain -2 - > /tmp/snapfifo
     rm -f $fullname
 
     sleep 1
