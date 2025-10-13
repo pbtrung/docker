@@ -21,7 +21,7 @@ SNAPSERVER_CONF=$(jq -r '.snapserver_conf' "$CONFIG_FILE")
 DOWNLOADS_DIR=$(jq -r '.downloads_dir' "$CONFIG_FILE")
 RCLONE_CONF=$(jq -r '.rclone_conf' "$CONFIG_FILE")
 SNAPFIFO=$(jq -r '.snapfifo' "$CONFIG_FILE")
-DB_PATH=$(jq -r '.db_path' "$CONFIG_FILE")
+DB_PATH=$(jq -r '.db_path // "/music/files.db"' "$CONFIG_FILE")
 
 # Debug: Print configuration
 echo "=== Configuration ==="
@@ -41,19 +41,28 @@ if ! wget -O "$DB_PATH" "$DB_URL"; then
 fi
 
 # Start snapserver with error handling
-echo "Starting snapserver..."
-if ! snapserver --config "$SNAPSERVER_CONF" & then
-    echo "Error: Failed to start snapserver"
+echo "Starting snapserver with config: $SNAPSERVER_CONF"
+echo "Checking if config file exists..."
+if [ ! -f "$SNAPSERVER_CONF" ]; then
+    echo "Error: Config file not found: $SNAPSERVER_CONF"
     exit 1
 fi
+echo "Config file exists, starting snapserver..."
+
+snapserver --config "$SNAPSERVER_CONF" &
 SNAPSERVER_PID=$!
+echo "Snapserver started with PID: $SNAPSERVER_PID"
 
 # Check if snapserver is still running
 sleep 1
 if ! kill -0 $SNAPSERVER_PID 2>/dev/null; then
-    echo "Error: snapserver failed to start"
+    echo "Error: snapserver failed to start or crashed immediately"
+    echo "Config file: $SNAPSERVER_CONF"
+    echo "Check snapserver logs for details"
+    echo "Try running manually: snapserver --config $SNAPSERVER_CONF"
     exit 1
 fi
+echo "Snapserver is running successfully"
 
 echo "Starting music playback loop..."
 while true; do
