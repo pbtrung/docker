@@ -21,7 +21,17 @@ SNAPSERVER_CONF=$(jq -r '.snapserver_conf' "$CONFIG_FILE")
 DOWNLOADS_DIR=$(jq -r '.downloads_dir' "$CONFIG_FILE")
 RCLONE_CONF=$(jq -r '.rclone_conf' "$CONFIG_FILE")
 SNAPFIFO=$(jq -r '.snapfifo' "$CONFIG_FILE")
-DB_PATH=$(jq -r '.db_path // "/music/files.db"' "$CONFIG_FILE")
+DB_PATH=$(jq -r '.db_path' "$CONFIG_FILE")
+
+# Debug: Print configuration
+echo "=== Configuration ==="
+echo "DB_URL: $DB_URL"
+echo "SNAPSERVER_CONF: $SNAPSERVER_CONF"
+echo "DOWNLOADS_DIR: $DOWNLOADS_DIR"
+echo "RCLONE_CONF: $RCLONE_CONF"
+echo "SNAPFIFO: $SNAPFIFO"
+echo "DB_PATH: $DB_PATH"
+echo "===================="
 
 # Download SQLite database with error handling
 echo "Downloading database..."
