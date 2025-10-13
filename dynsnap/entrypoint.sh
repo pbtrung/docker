@@ -113,26 +113,9 @@ kill_pipeline() {
     fi
 }
 
-throttle_stderr() {
-    while IFS= read -r line; do
-        if echo "$line" | grep -qE '^\[.\]'; then
-            echo "$line" > "$INFOFIFO"
-            sleep 1
-        else
-            echo "$line" > "$INFOFIFO"
-        fi
-    done
-}
-
 # Play a single track
 play_track() {
     local fullname="$1"
-    local stderr_fifo="/tmp/opusdec_stderr_$$"
-    
-    # Start stderr throttler in background
-    mkfifo "$stderr_fifo"
-    (throttle_stderr < "$stderr_fifo") &
-    THROTTLE_PID=$!
     
     # Start gwsocket
     (gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO") &
@@ -141,7 +124,7 @@ play_track() {
     # Start the audio pipeline
     (
         set -o pipefail
-        opusdec "$fullname" --rate 48000 --force-stereo - 2>"$stderr_fifo" | \
+        opusdec "$fullname" --rate 48000 --force-stereo 2>"$INFOFIFO" - | \
         ffmpeg -y \
           -f s16le -ac 2 -ar 48000 -i - \
           -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
@@ -153,8 +136,6 @@ play_track() {
     # Wait for the pipeline to complete
     if ! wait $PIPELINE_PID; then
         echo "Error: opusdec or ffmpeg failed for $fullname"
-        kill $THROTTLE_PID 2>/dev/null || true
-        rm -f "$stderr_fifo"
         kill_gwsocket
         kill_pipeline
         rm -f "$fullname"
@@ -162,8 +143,6 @@ play_track() {
     fi
     
     # Pipeline completed successfully
-    kill $THROTTLE_PID 2>/dev/null || true
-    rm -f "$stderr_fifo"
     kill_gwsocket
     rm -f "$fullname"
     return 0
