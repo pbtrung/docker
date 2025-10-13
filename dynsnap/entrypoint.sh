@@ -152,7 +152,7 @@ play_track() {
 playback_loop() {
     echo "Starting music playback loop..."
     mkfifo "$INFOFIFO"
-    [ -d "$DOWNLOADS_DIR" ] && rm -f "$DOWNLOADS_DIR"/*
+    find "$DOWNLOADS_DIR" -maxdepth 1 -type f -delete 2>/dev/null
     
     while true; do
         local path=$(get_random_track)
