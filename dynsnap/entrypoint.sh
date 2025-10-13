@@ -117,11 +117,9 @@ kill_pipeline() {
 play_track() {
     local fullname="$1"
     
-    # Start gwsocket
     (gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO") &
     GWSOCKET_PID=$!
     
-    # Start the audio pipeline
     (
         set -o pipefail
         opusdec "$fullname" --rate 48000 --force-stereo 2>"$INFOFIFO" - | \
