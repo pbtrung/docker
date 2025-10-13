@@ -115,7 +115,7 @@ kill_pipeline() {
 
 throttle_stderr() {
     while IFS= read -r line; do
-        if echo "$line" | grep -q '^\[-\]'; then
+        if echo "$line" | grep -q '^\[.\]'; then
             echo "$line"
             sleep 1
         else
