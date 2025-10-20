@@ -125,7 +125,7 @@ play_track() {
         #   -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
         #   -f s16le -ac 2 -ar 48000 "$SNAPFIFO" \
         #   -hide_banner -loglevel error
-        opusdec "$fullname" --rate 48000 --force-stereo --gain -3 2>"$INFOFIFO" "$SNAPFIFO"
+        opusdec --rate 48000 --force-stereo --gain -3 "$fullname" "$SNAPFIFO" 2>"$INFOFIFO"
     ) &
     PIPELINE_PID=$!
     
