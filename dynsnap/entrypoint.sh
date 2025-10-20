@@ -119,13 +119,13 @@ play_track() {
     
     (
         set -o pipefail
-        # opusdec "$fullname" --rate 48000 --force-stereo 2>"$INFOFIFO" - | \
-        # ffmpeg -y \
-        #   -f s16le -ac 2 -ar 48000 -i - \
-        #   -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
-        #   -f s16le -ac 2 -ar 48000 "$SNAPFIFO" \
-        #   -hide_banner -loglevel error
-        opusdec --rate 48000 --force-stereo --gain -3 "$fullname" "$SNAPFIFO" 2>"$INFOFIFO"
+        # opusdec --rate 48000 --force-stereo --gain -3 "$fullname" "$SNAPFIFO" 2>"$INFOFIFO"
+        opusdec --rate 48000 --force-stereo 2>"$INFOFIFO" "$fullname" - | \
+        ffmpeg -y \
+          -f s16le -ac 2 -ar 48000 -i - \
+          -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
+          -f s16le -ac 2 -ar 48000 "$SNAPFIFO" \
+          -hide_banner -loglevel error
     ) &
     PIPELINE_PID=$!
     
