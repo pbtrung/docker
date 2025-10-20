@@ -46,7 +46,7 @@ load_config() {
 # Download database from URL
 download_database() {
     echo "Downloading database..."
-    if ! wget -O "$DB_PATH" "$DB_URL"; then
+    if ! wget -O "$DB_PATH" "$DB_URL" 2>"$INFOFIFO"; then
         echo "Error: Failed to download database from $DB_URL"
         exit 1
     fi
@@ -90,7 +90,7 @@ download_track() {
     local path="$1"
     
     echo "Downloading: $path"
-    if ! rclone --config "$RCLONE_CONF" copy "$path" "$DOWNLOADS_DIR/" -v --stats 5s; then
+    if ! rclone --config "$RCLONE_CONF" copy "$path" "$DOWNLOADS_DIR/" -v --stats 5s 2>"$INFOFIFO"; then
         echo "Error: rclone failed to download $path"
         exit 1
     fi
@@ -142,14 +142,19 @@ play_track() {
     return 0
 }
 
+# Start gwsocket with FIFO
+start_gwsocket() {
+    echo "Creating FIFO and starting gwsocket..."
+    mkfifo "$INFOFIFO"
+    (gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO") &
+    GWSOCKET_PID=$!
+    echo "gwsocket started with PID: $GWSOCKET_PID"
+}
+
 # Main playback loop
 playback_loop() {
     echo "Starting music playback loop..."
     find "$DOWNLOADS_DIR" -maxdepth 1 -type f -delete 2>/dev/null
-
-    mkfifo "$INFOFIFO"
-    (gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO") &
-    GWSOCKET_PID=$!
     
     while true; do
         local path=$(get_random_track)
@@ -173,6 +178,7 @@ playback_loop() {
 # Main execution
 main() {
     load_config
+    start_gwsocket
     download_database
     start_snapserver
     playback_loop
