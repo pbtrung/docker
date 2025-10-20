@@ -117,9 +117,6 @@ kill_pipeline() {
 play_track() {
     local fullname="$1"
     
-    (gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO") &
-    GWSOCKET_PID=$!
-    
     (
         set -o pipefail
         opusdec "$fullname" --rate 48000 --force-stereo 2>"$INFOFIFO" - | \
@@ -134,14 +131,12 @@ play_track() {
     # Wait for the pipeline to complete
     if ! wait $PIPELINE_PID; then
         echo "Error: opusdec or ffmpeg failed for $fullname"
-        kill_gwsocket
         kill_pipeline
         rm -f "$fullname"
         return 1
     fi
     
     # Pipeline completed successfully
-    kill_gwsocket
     rm -f "$fullname"
     return 0
 }
@@ -149,8 +144,11 @@ play_track() {
 # Main playback loop
 playback_loop() {
     echo "Starting music playback loop..."
-    mkfifo "$INFOFIFO"
     find "$DOWNLOADS_DIR" -maxdepth 1 -type f -delete 2>/dev/null
+
+    mkfifo "$INFOFIFO"
+    (gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO") &
+    GWSOCKET_PID=$!
     
     while true; do
         local path=$(get_random_track)
@@ -167,6 +165,8 @@ playback_loop() {
         
         sleep 1
     done
+
+    kill_gwsocket
 }
 
 # Main execution
