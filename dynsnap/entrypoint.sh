@@ -128,15 +128,16 @@ play_track() {
         #   -f s16le -ac 2 -ar 48000 "$SNAPFIFO" \
         #   -hide_banner -loglevel error
 
-        gain=$(opusdec --rate 48000 --force-stereo --force-wav --quiet "$fullname" - | wavegain --fast - 2>&1 | awk '/^\s*-?[0-9]+\.[0-9]+.*dB/{print $1}')
+        # gain=$(opusdec --rate 48000 --force-stereo --force-wav --quiet "$fullname" - | wavegain --fast - 2>&1 | awk '/^\s*-?[0-9]+\.[0-9]+.*dB/{print $1}')
+        opusdec --rate 48000 --force-stereo --force-wav --quiet "$fullname" - | wavegain --fast - 2>"$INFOFIFO"
         # Check if gain extraction succeeded
-        if [[ -z "$gain" ]]; then
-            echo "Error: Failed to calculate gain for $fullname" >&2
-            gain=0
-        fi
+        # if [[ -z "$gain" ]]; then
+        #     echo "Error: Failed to calculate gain for $fullname" >&2
+        #     gain=0
+        # fi
         # Invert the gain (if wavegain says -5.84, we need +5.84)
-        gain_inverted=$(awk "BEGIN {print -1 * $gain}")
-        echo "gain_inverted: $gain_inverted" > "$INFOFIFO"
+        # gain_inverted=$(awk "BEGIN {print -1 * $gain}")
+        # echo "gain_inverted: $gain_inverted" > "$INFOFIFO"
         opusdec --rate 48000 --force-stereo --gain -3 "$fullname" "$SNAPFIFO" 2>"$INFOFIFO"
     ) &
     PIPELINE_PID=$!
