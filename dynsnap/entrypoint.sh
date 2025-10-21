@@ -125,6 +125,7 @@ play_track() {
     # Check if gain was successfully extracted
     if [[ -z "$gain" ]] || ! [[ "$gain" =~ ^-?[0-9]+\.?[0-9]*$ ]]; then
         echo "Warning: Could not determine gain for $fullname, using 0" >&2
+        echo "gain: $gain" >&2
         gain=0
     fi
     # Invert the gain
