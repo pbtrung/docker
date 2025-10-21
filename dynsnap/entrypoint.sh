@@ -116,11 +116,24 @@ kill_pipeline() {
 # Play a single track
 play_track() {
     local fullname="$1"
+    
+    local gain_value
+    gain_value=$(ffmpeg -y \
+        -t 60 -i "$fullname" \
+        -af loudnorm=I=-16:print_format=json \
+        -f null - 2>&1 | \
+        awk '/^\{/,/^\}/' | jq -r ".target_offset")
+
+    if [[ -z "$gain_value" || "$gain_value" == "null" ]]; then
+        echo "Warning: Could not determine gain_value, using 0"
+        gain_value=0
+    fi
+    echo "\ngain_value: ${gain_value}\n"
 
     (
         set -o pipefail
-
-        opusdec --rate 48000 --force-stereo "$fullname" "$SNAPFIFO" 2>"$INFOFIFO"
+        echo "\ngain_value: ${gain_value}\n" > "$INFOFIFO"
+        opusdec --rate 48000 --force-stereo --gain "$gain_value" "$fullname" "$SNAPFIFO" 2>"$INFOFIFO"
         # opusdec --rate 48000 --force-stereo 2>"$INFOFIFO" "$fullname" - | \
         # ffmpeg -y \
         #   -f s16le -ac 2 -ar 48000 -i - \
