@@ -128,11 +128,16 @@ play_track() {
         echo "Warning: Could not determine gain_value, using 0"
         gain_value=0
     fi
-    echo "\ngain_value: ${gain_value}\n"
+
+    # print to stdout and INFOFIFO simultaneously
+    {
+        echo "=== gain ==="
+        echo "gain_value: ${gain_value}"
+        echo "============"
+    } | tee >(cat >"$INFOFIFO")
 
     (
         set -o pipefail
-        echo "\ngain_value: ${gain_value}\n" > "$INFOFIFO"
         opusdec --rate 48000 --force-stereo --gain "$gain_value" "$fullname" "$SNAPFIFO" 2>"$INFOFIFO"
         # opusdec --rate 48000 --force-stereo 2>"$INFOFIFO" "$fullname" - | \
         # ffmpeg -y \
