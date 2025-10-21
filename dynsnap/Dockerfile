@@ -2,7 +2,7 @@ FROM alpine:edge AS build
 
 RUN apk update && \
     apk --no-cache upgrade && \
-    apk add --no-cache alpine-sdk git pkgconf autoconf automake bash
+    apk add --no-cache alpine-sdk git pkgconf autoconf automake bash sed
 
 WORKDIR /root
 
@@ -12,6 +12,12 @@ RUN git clone https://github.com/allinurl/gwsocket && \
     ./configure && \
     make
 
+RUN git clone https://github.com/MestreLion/wavegain && \
+    cd wavegain && \
+    sed -i 's/CFLAGS  += -m32/CFLAGS  += -fcommon/g' Makefile && \
+    make
+
+
 FROM alpine:edge
 
 RUN echo "@testing https://dl-cdn.alpinelinux.org/alpine/edge/testing" >> /etc/apk/repositories
@@ -19,9 +25,10 @@ RUN echo "@testing https://dl-cdn.alpinelinux.org/alpine/edge/testing" >> /etc/a
 RUN apk update && \
     apk --no-cache upgrade && \
     apk --no-cache add snapcast-server snapweb@testing \
-        wget coreutils sqlite jq rclone opus-tools ffmpeg
+        wget coreutils gawk sqlite jq rclone opus-tools
 
 COPY --from=build /root/gwsocket/gwsocket /usr/bin/
+COPY --from=build /root/wavegain/wavegain /usr/bin/
 
 WORKDIR /script
 COPY entrypoint.sh /script/

@@ -119,13 +119,25 @@ play_track() {
     
     (
         set -o pipefail
+
         # opusdec --rate 48000 --force-stereo --gain -3 "$fullname" "$SNAPFIFO" 2>"$INFOFIFO"
-        opusdec --rate 48000 --force-stereo 2>"$INFOFIFO" "$fullname" - | \
-        ffmpeg -y \
-          -f s16le -ac 2 -ar 48000 -i - \
-          -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
-          -f s16le -ac 2 -ar 48000 "$SNAPFIFO" \
-          -hide_banner -loglevel error
+        # opusdec --rate 48000 --force-stereo 2>"$INFOFIFO" "$fullname" - | \
+        # ffmpeg -y \
+        #   -f s16le -ac 2 -ar 48000 -i - \
+        #   -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
+        #   -f s16le -ac 2 -ar 48000 "$SNAPFIFO" \
+        #   -hide_banner -loglevel error
+
+        gain=$(opusdec --rate 48000 --force-stereo --force-wav --quiet "$fullname" - | \
+        wavegain --fast - 2>&1 | awk '/^\s*-?[0-9]+\.[0-9]+.*dB/{print $1}')
+        # Check if gain extraction succeeded
+        if [[ -z "$gain" ]]; then
+            echo "Error: Failed to calculate gain for $fullname" >&2
+            gain=0
+        fi
+        # Invert the gain (if wavegain says -5.84, we need +5.84)
+        gain_inverted=$(awk "BEGIN {print -1 * $gain}")
+        opusdec --rate 48000 --force-stereo --gain "$gain_inverted" "$fullname" "$SNAPFIFO" 2>"$INFOFIFO"
     ) &
     PIPELINE_PID=$!
     
