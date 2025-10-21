@@ -128,8 +128,7 @@ play_track() {
         #   -f s16le -ac 2 -ar 48000 "$SNAPFIFO" \
         #   -hide_banner -loglevel error
 
-        gain=$(opusdec --rate 48000 --force-stereo --force-wav --quiet "$fullname" - | \
-        wavegain --fast - 2>&1 | awk '/^\s*-?[0-9]+\.[0-9]+.*dB/{print $1}')
+        gain=$(opusdec --rate 48000 --force-stereo --force-wav --quiet "$fullname" - | wavegain --fast - 2>&1 | awk '/^\s*-?[0-9]+\.[0-9]+.*dB/{print $1}')
         # Check if gain extraction succeeded
         if [[ -z "$gain" ]]; then
             echo "Error: Failed to calculate gain for $fullname" >&2
