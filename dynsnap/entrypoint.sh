@@ -136,6 +136,7 @@ play_track() {
         fi
         # Invert the gain (if wavegain says -5.84, we need +5.84)
         gain_inverted=$(awk "BEGIN {print -1 * $gain}")
+        echo "gain_inverted: $gain_inverted"
         opusdec --rate 48000 --force-stereo --gain -3 "$fullname" "$SNAPFIFO" 2>"$INFOFIFO"
     ) &
     PIPELINE_PID=$!
