@@ -15,7 +15,7 @@ RUN git clone https://github.com/allinurl/gwsocket && \
 RUN git clone https://github.com/MestreLion/wavegain && \
     cd wavegain && \
     sed -i 's/CFLAGS  += -m32/CFLAGS  += -fcommon/g' Makefile && \
-    sed -i 's/^extern char \*getenv ();$/#include <stdlib.h>/' getopt.c && \
+    rm getopt.c getopt1.c getopt.h && \
     make
 
 
