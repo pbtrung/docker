@@ -30,7 +30,7 @@ load_config() {
     RCLONE_CONF=$(jq -r '.rclone_conf' "$config_file")
     SNAPFIFO=$(jq -r '.snapfifo' "$config_file")
     INFOFIFO=$(jq -r '.infofifo' "$config_file")
-    DB_PATH=$(jq -r '.db_path // "/music/files.db"' "$config_file")
+    DB_PATH=$(jq -r '.db_path' "$config_file")
     
     echo "=== Configuration ==="
     echo "DB_URL: $DB_URL"
@@ -120,7 +120,7 @@ play_track() {
     set -o pipefail
     gst-launch-1.0 -t playbin3 uri=file://"$fullname" \
         audio-sink="audioresample ! audioloudnorm loudness-target=-16.0 ! audioresample ! audioconvert ! audio/x-raw,rate=48000,channels=2,format=S16LE ! filesink location=$SNAPFIFO" \
-        2>"$INFOFIFO" &
+        1>"$INFOFIFO" &
     PIPELINE_PID=$!
     
     if ! wait $PIPELINE_PID; then
