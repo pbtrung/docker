@@ -118,8 +118,7 @@ play_track() {
     local fullname="$1"
     
     gst-launch-1.0 -e -t \
-        filesrc location="$fullname" ! decodebin ! audioconvert ! audioresample ! \
-        audioloudnorm loudness-target=-16.0 ! audioresample ! audioconvert ! \
+        filesrc location="$fullname" ! decodebin ! audioresample ! audioconvert ! \
         audio/x-raw,rate=48000,channels=2,format=S16LE ! filesink location="$SNAPFIFO" \
         1>"$INFOFIFO" 2>&1 &
     PIPELINE_PID=$!
