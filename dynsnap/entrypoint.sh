@@ -122,7 +122,7 @@ play_track() {
         audio-sink="audioresample ! audioloudnorm loudness-target=-16.0 ! \
                     audioresample ! audioconvert ! \
                     audio/x-raw,rate=48000,channels=2,format=S16LE ! filesink location=$SNAPFIFO" \
-        1>"$INFOFIFO" &
+        1>"$INFOFIFO" 2>&1 &
     PIPELINE_PID=$!
     
     if ! wait $PIPELINE_PID; then
