@@ -118,8 +118,12 @@ play_track() {
     local fullname="$1"
     
     set -o pipefail
-    gst-launch-1.0 -t playbin3 uri=file://"$fullname" \
-        audio-sink="audioresample ! audioloudnorm loudness-target=-16.0 ! audioresample ! audioconvert ! audio/x-raw,rate=48000,channels=2,format=S16LE ! filesink location=$SNAPFIFO" \
+    gst-launch-1.0 -t uridecodebin uri=file://"$fullname" ! \
+        audioresample ! \
+        audioloudnorm loudness-target=-16.0 ! \
+        audioresample ! audioconvert ! \
+        audio/x-raw,rate=48000,channels=2,format=S16LE ! \
+        filesink location="$SNAPFIFO" \
         1>"$INFOFIFO" &
     PIPELINE_PID=$!
     
