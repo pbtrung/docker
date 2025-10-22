@@ -117,19 +117,20 @@ kill_pipeline() {
 play_track() {
     local fullname="$1"
     
-    # set -o pipefail
-    gst-launch-1.0 -t playbin3 uri=file://"$fullname" \
+    set -o pipefail
+    gst-launch-1.0 -e -t playbin3 uri=file://"$fullname" \
         audio-sink="audioresample ! audioloudnorm loudness-target=-16.0 ! \
                     audioresample ! audioconvert ! \
-                    audio/x-raw,rate=48000,channels=2,format=S16LE ! filesink location=$SNAPFIFO"
-    # PIPELINE_PID=$!
+                    audio/x-raw,rate=48000,channels=2,format=S16LE ! filesink location=$SNAPFIFO" \
+        1>"$INFOFIFO" &
+    PIPELINE_PID=$!
     
-    # if ! wait $PIPELINE_PID; then
-    #     echo "Error: pipeline failed for $fullname"
-    #     kill_pipeline
-    #     rm -f "$fullname"
-    #     return 1
-    # fi
+    if ! wait $PIPELINE_PID; then
+        echo "Error: pipeline failed for $fullname"
+        kill_pipeline
+        rm -f "$fullname"
+        return 1
+    fi
     
     rm -f "$fullname"
     return 0
@@ -139,7 +140,6 @@ play_track() {
 start_gwsocket() {
     echo "Creating FIFO and starting gwsocket..."
     mkfifo "$INFOFIFO"
-    mkfifo "$SNAPFIFO"
     (gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO") &
     GWSOCKET_PID=$!
     echo "gwsocket started with PID: $GWSOCKET_PID"
