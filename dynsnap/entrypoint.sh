@@ -117,7 +117,7 @@ kill_pipeline() {
 play_track() {
     local fullname="$1"
     
-    gst-launch-1.0 -t playbin3 uri=file://"$fullname" \
+    gst-launch-1.0 -e -t --force-position playbin3 uri=file://"$fullname" \
         audio-sink="audioresample ! audioconvert ! \
                     audio/x-raw,rate=48000,channels=2,format=S16LE ! filesink location=$SNAPFIFO" \
         1>"$INFOFIFO" 2>&1 &
