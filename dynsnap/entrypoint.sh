@@ -119,7 +119,7 @@ play_track() {
     
     set -o pipefail
     gst-launch-1.0 -t filesrc location="$fullname" ! \
-        decodebin ! \
+        decodebin ! audioconvert ! \
         audioresample ! \
         audioloudnorm loudness-target=-16.0 ! \
         audioresample ! audioconvert ! \
