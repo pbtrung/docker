@@ -118,16 +118,12 @@ play_track() {
     local fullname="$1"
     
     set -o pipefail
-    gst-launch-1.0 -e -t playbin3 uri=file://"$fullname" \
-        audio-sink="audioresample ! audioloudnorm loudness-target=-16.0 ! \
-                    audioresample ! audioconvert ! \
-                    audio/x-raw,rate=48000,channels=2,format=S16LE ! filesink location=$SNAPFIFO" \
-        1>"$INFOFIFO" &
-    PIPELINE_PID=$!
-    
-    if ! wait $PIPELINE_PID; then
+    if ! gst-launch-1.0 -e -t playbin3 uri=file://"$fullname" \
+            audio-sink="audioresample ! audioloudnorm loudness-target=-16.0 ! \
+                        audioresample ! audioconvert ! \
+                        audio/x-raw,rate=48000,channels=2,format=S16LE ! filesink location=$SNAPFIFO" \
+            1>"$INFOFIFO" 2>&1; then
         echo "Error: pipeline failed for $fullname"
-        kill_pipeline
         rm -f "$fullname"
         return 1
     fi
