@@ -118,7 +118,8 @@ play_track() {
     local fullname="$1"
     
     set -o pipefail
-    gst-launch-1.0 -t uridecodebin uri=file://"$fullname" ! \
+    gst-launch-1.0 -t filesrc location="$fullname" ! \
+        decodebin ! \
         audioresample ! \
         audioloudnorm loudness-target=-16.0 ! \
         audioresample ! audioconvert ! \
