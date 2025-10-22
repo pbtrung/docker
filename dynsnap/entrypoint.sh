@@ -120,7 +120,15 @@ play_track() {
     gst-launch-1.0 -e -t --force-position playbin3 uri=file://"$fullname" \
         audio-sink="audioresample ! audioconvert ! \
                     audio/x-raw,rate=48000,channels=2,format=S16LE ! filesink location=$SNAPFIFO" \
-        1>"$INFOFIFO" 2>&1 &
+        2>&1 | stdbuf -oL awk '
+            /^[0-9]+:[0-9]{2}:[0-9]{2}\.[0-9] \/ [0-9]+:[0-9]{2}:[0-9]{2}\.[0-9]/ {
+                # overwrite progress line
+                printf "\r%s", $0; fflush();
+                next;
+            }
+            # print metadata normally
+            { print; }
+        ' >"$INFOFIFO" &
     PIPELINE_PID=$!
     
     if ! wait $PIPELINE_PID; then
