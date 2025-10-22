@@ -22,8 +22,8 @@ RUN apk update && \
     apk --no-cache add snapcast-server snapweb@testing \
         wget coreutils sqlite jq rclone gstreamer-tools \
         gst-plugins-base gst-plugins-good \
-        gst-plugins-bad gst-plugins-rs-rsaudiofx \
-        gst-plugins-rs-rsfile
+        gst-plugins-bad gst-plugins-ugly \
+        gst-plugins-rs-rsaudiofx gst-plugins-rs-rsfile
 
 COPY --from=build /root/gwsocket/gwsocket /usr/bin/
 
