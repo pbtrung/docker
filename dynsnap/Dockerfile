@@ -20,7 +20,8 @@ RUN echo "@testing https://dl-cdn.alpinelinux.org/alpine/edge/testing" >> /etc/a
 RUN apk update && \
     apk --no-cache upgrade && \
     apk --no-cache add snapcast-server snapweb@testing \
-        wget coreutils gawk sqlite jq rclone opus-tools ffmpeg
+        wget coreutils sqlite jq rclone \
+        gst-plugins-base gst-plugins-good gst-plugins-rs-rsaudiofx
 
 COPY --from=build /root/gwsocket/gwsocket /usr/bin/
 

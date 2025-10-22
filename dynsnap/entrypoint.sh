@@ -117,46 +117,20 @@ kill_pipeline() {
 play_track() {
     local fullname="$1"
     
-    local gain_value
-    gain_value=$(ffmpeg -y \
-        -t 60 -i "$fullname" \
-        -af loudnorm=I=-16:print_format=json \
-        -f null - 2>&1 | \
-        awk '/^\{/,/^\}/' | jq -r ".target_offset")
-
-    if [[ -z "$gain_value" || "$gain_value" == "null" ]]; then
-        echo "Warning: Could not determine gain_value, using 0"
-        gain_value=0
-    fi
-
-    # print to stdout and INFOFIFO simultaneously
-    {
-        echo "=== gain ==="
-        echo "gain_value: ${gain_value}"
-        echo "============"
-    } | tee >(cat >"$INFOFIFO")
-
-    (
-        set -o pipefail
-        opusdec --rate 48000 --force-stereo --gain "$gain_value" "$fullname" "$SNAPFIFO" 2>"$INFOFIFO"
-        # opusdec --rate 48000 --force-stereo 2>"$INFOFIFO" "$fullname" - | \
-        # ffmpeg -y \
-        #   -f s16le -ac 2 -ar 48000 -i - \
-        #   -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
-        #   -f s16le -ac 2 -ar 48000 "$SNAPFIFO" \
-        #   -hide_banner -loglevel error
-    ) &
+    set -o pipefail
+    gst-launch-1.0 -t playbin3 uri=file://"$fullname" \
+        audio-filter="audioresample ! audioloudnorm loudness-target=-16.0 ! audioresample ! audioconvert ! audio/x-raw,rate=48000,channels=2,format=S16LE ! filesink location=$SNAPFIFO" \
+        2>"$INFOFIFO" &
     PIPELINE_PID=$!
     
-    # Wait for the pipeline to complete
+    # Wait for pipeline and handle errors
     if ! wait $PIPELINE_PID; then
-        echo "Error: opusdec or ffmpeg failed for $fullname"
+        echo "Error: pipeline failed for $fullname"
         kill_pipeline
         rm -f "$fullname"
         return 1
     fi
     
-    # Pipeline completed successfully
     rm -f "$fullname"
     return 0
 }
