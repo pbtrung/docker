@@ -126,7 +126,7 @@ process_gst_output() {
         {
             # Before printing metadata, ensure it starts on a new line
             if (progress_seen) {
-                printf "\n"
+                printf "\n\n"
                 progress_seen = 0
             }
             print
@@ -136,7 +136,7 @@ process_gst_output() {
         END {
             # Ensure final newline at end of decoding
             if (progress_seen)
-                printf "\n"
+                printf "\n\n"
             fflush()
         }
     '
