@@ -19,6 +19,7 @@ cleanup() {
     pkill -P $$ ffmpeg 2>/dev/null || true
     pkill -P $$ snapserver 2>/dev/null || true
     pkill -P $$ gwsocket 2>/dev/null || true
+    rm -f "$INFOFIFO" 2>/dev/null || true  # Remove FIFO on cleanup
     exit 1
 }
 
@@ -140,6 +141,7 @@ play_track() {
 # Start gwsocket with FIFO
 start_gwsocket() {
     log_message "Creating FIFO and starting gwsocket..."
+    rm -f "$INFOFIFO"  # Remove existing FIFO if present
     mkfifo "$INFOFIFO"
     gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO" &
     GWSOCKET_PID=$!
