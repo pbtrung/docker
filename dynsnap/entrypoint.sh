@@ -153,10 +153,11 @@ play_track() {
     
     log_message "Analyzing loudness for $fullname ..."
     
-    gain_value=$(ffmpeg -y -t 60 -i "$fullname" \
-        -af loudnorm=I=-16:print_format=json \
+    gain_value=$(ffmpeg -y -i "$fullname" \
+        -af "aformat=sample_rates=16000:channel_layouts=mono,loudnorm=I=-16:print_format=json" \
         -f null - 2>&1 | \
-        awk '/^\{/,/^\}/' | jq -r ".target_offset")
+        awk '/^\{/,/^\}/' | \
+        jq -r ".target_offset")
     
     if [[ -z "$gain_value" || "$gain_value" == "null" ]]; then
         log_message "Warning: Could not determine gain_value, using 0 dB"
