@@ -113,22 +113,44 @@ kill_pipeline() {
     fi
 }
 
+process_gst_output() {
+    stdbuf -oL awk '
+        /^[0-9]+:[0-9]{2}:[0-9]{2}\.[0-9] \/ [0-9]+:[0-9]{2}:[0-9]{2}\.[0-9]/ {
+            # Progress update: overwrite the same line
+            printf "\r%s", $0
+            fflush()
+            progress_seen = 1
+            next
+        }
+
+        {
+            # Before printing metadata, ensure it starts on a new line
+            if (progress_seen) {
+                printf "\n"
+                progress_seen = 0
+            }
+            print
+            fflush()
+        }
+
+        END {
+            # Ensure final newline at end of decoding
+            if (progress_seen)
+                printf "\n"
+            fflush()
+        }
+    '
+}
+
 # Play a single track
 play_track() {
     local fullname="$1"
     
-    gst-launch-1.0 -e -t --force-position playbin3 uri=file://"$fullname" \
+    gst-launch-1.0 -e -t --force-position playbin3 uri="file://$fullname" \
         audio-sink="audioresample ! audioconvert ! \
-                    audio/x-raw,rate=48000,channels=2,format=S16LE ! filesink location=$SNAPFIFO" \
-        2>&1 | stdbuf -oL awk '
-            /^[0-9]+:[0-9]{2}:[0-9]{2}\.[0-9] \/ [0-9]+:[0-9]{2}:[0-9]{2}\.[0-9]/ {
-                # overwrite progress line
-                printf "\r%s", $0; fflush();
-                next;
-            }
-            # print metadata normally
-            { print; }
-        ' >"$INFOFIFO" &
+                    audio/x-raw,rate=48000,channels=2,format=S16LE ! \
+                    filesink location=$SNAPFIFO" \
+        2>&1 | process_gst_output >"$INFOFIFO" &
     PIPELINE_PID=$!
     
     if ! wait $PIPELINE_PID; then
