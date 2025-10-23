@@ -198,7 +198,7 @@ play_track() {
 start_gwsocket() {
     echo "Creating FIFO and starting gwsocket..."
     mkfifo "$INFOFIFO"
-    (gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO") &
+    gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO" &
     GWSOCKET_PID=$!
     echo "gwsocket started with PID: $GWSOCKET_PID"
 }
