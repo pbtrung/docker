@@ -8,9 +8,14 @@ SNAPSERVER_PID=""
 GWSOCKET_PID=""
 PIPELINE_PID=""
 
+# Logging function (defined early for use throughout)
+log_message() {
+    echo "$1" | tee "$INFOFIFO" 2>/dev/null || echo "$1"
+}
+
 # Cleanup function
 cleanup() {
-    echo "Cleaning up..."
+    log_message "Cleaning up..."
     pkill -P $$ ffmpeg 2>/dev/null || true
     pkill -P $$ snapserver 2>/dev/null || true
     pkill -P $$ gwsocket 2>/dev/null || true
@@ -32,50 +37,47 @@ load_config() {
     INFOFIFO=$(jq -r '.infofifo' "$config_file")
     DB_PATH=$(jq -r '.db_path' "$config_file")
     
-    echo "=== Configuration ==="
-    echo "DB_URL: $DB_URL"
-    echo "SNAPSERVER_CONF: $SNAPSERVER_CONF"
-    echo "DOWNLOADS_DIR: $DOWNLOADS_DIR"
-    echo "RCLONE_CONF: $RCLONE_CONF"
-    echo "SNAPFIFO: $SNAPFIFO"
-    echo "DB_PATH: $DB_PATH"
-    echo "INFOFIFO: $INFOFIFO"
-    echo "===================="
+    log_message "=== Configuration ==="
+    log_message "DB_URL: $DB_URL"
+    log_message "SNAPSERVER_CONF: $SNAPSERVER_CONF"
+    log_message "DOWNLOADS_DIR: $DOWNLOADS_DIR"
+    log_message "RCLONE_CONF: $RCLONE_CONF"
+    log_message "SNAPFIFO: $SNAPFIFO"
+    log_message "DB_PATH: $DB_PATH"
+    log_message "INFOFIFO: $INFOFIFO"
+    log_message "===================="
 }
 
 # Download database from URL
 download_database() {
-    echo "Downloading database..."
+    log_message "Downloading database..."
     if ! wget -O "$DB_PATH" "$DB_URL" 2>"$INFOFIFO"; then
-        echo "Error: Failed to download database from $DB_URL"
+        log_message "Error: Failed to download database from $DB_URL"
         exit 1
     fi
 }
 
 # Start snapserver and verify it's running
 start_snapserver() {
-    echo "Starting snapserver with config: $SNAPSERVER_CONF"
+    log_message "Starting snapserver with config: $SNAPSERVER_CONF"
     
     if [ ! -f "$SNAPSERVER_CONF" ]; then
-        echo "Error: Config file not found: $SNAPSERVER_CONF"
+        log_message "Error: Config file not found: $SNAPSERVER_CONF"
         exit 1
     fi
     
-    echo "Config file exists, starting snapserver..."
     snapserver --config "$SNAPSERVER_CONF" &
     SNAPSERVER_PID=$!
-    echo "Snapserver started with PID: $SNAPSERVER_PID"
+    log_message "Snapserver started with PID: $SNAPSERVER_PID"
     
     sleep 1
     if ! kill -0 $SNAPSERVER_PID 2>/dev/null; then
-        echo "Error: snapserver failed to start or crashed immediately"
-        echo "Config file: $SNAPSERVER_CONF"
-        echo "Check snapserver logs for details"
-        echo "Try running manually: snapserver --config $SNAPSERVER_CONF"
+        log_message "Error: snapserver failed to start or crashed immediately"
+        log_message "Try running manually: snapserver --config $SNAPSERVER_CONF"
         exit 1
     fi
     
-    echo "Snapserver is running successfully"
+    log_message "Snapserver is running successfully"
 }
 
 # Get a random track from the database
@@ -89,19 +91,19 @@ get_random_track() {
 download_track() {
     local path="$1"
     
-    echo "Downloading: $path"
+    log_message "Downloading: $path"
     if ! rclone --config "$RCLONE_CONF" copy "$path" "$DOWNLOADS_DIR/" -v --stats 5s 2>"$INFOFIFO"; then
-        echo "Error: rclone failed to download $path"
+        log_message "Error: rclone failed to download $path"
         exit 1
     fi
 }
 
-# Kill gwsocket process
-kill_gwsocket() {
-    if [ -n "$GWSOCKET_PID" ]; then
-        kill $GWSOCKET_PID 2>/dev/null || true
-        wait $GWSOCKET_PID 2>/dev/null || true
-        GWSOCKET_PID=""
+# Kill process helper
+kill_process() {
+    local pid="$1"
+    if [ -n "$pid" ]; then
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
     fi
 }
 
@@ -109,41 +111,8 @@ kill_gwsocket() {
 kill_pipeline() {
     if [ -n "$PIPELINE_PID" ]; then
         pkill -P $PIPELINE_PID 2>/dev/null || true
-        PIPELINE_PID=""
     fi
-}
-
-process_gst_output() {
-    stdbuf -oL awk '
-        /^[0-9]+:[0-9]{2}:[0-9]{2}\.[0-9] \/ [0-9]+:[0-9]{2}:[0-9]{2}\.[0-9]/ {
-            # Progress update: overwrite the same line
-            printf "\r%s", $0
-            fflush()
-            progress_seen = 1
-            next
-        }
-
-        {
-            # Before printing metadata, ensure it starts on a new line
-            if (progress_seen) {
-                printf "\n\n"
-                progress_seen = 0
-            }
-            print
-            fflush()
-        }
-
-        END {
-            # Ensure final newline at end of decoding
-            if (progress_seen)
-                printf "\n\n"
-            fflush()
-        }
-    '
-}
-
-log_message() {
-    echo "$1" | tee "$INFOFIFO"
+    PIPELINE_PID=""
 }
 
 # Play a single track
@@ -170,16 +139,16 @@ play_track() {
 
 # Start gwsocket with FIFO
 start_gwsocket() {
-    echo "Creating FIFO and starting gwsocket..."
+    log_message "Creating FIFO and starting gwsocket..."
     mkfifo "$INFOFIFO"
     gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO" &
     GWSOCKET_PID=$!
-    echo "gwsocket started with PID: $GWSOCKET_PID"
+    log_message "gwsocket started with PID: $GWSOCKET_PID"
 }
 
 # Main playback loop
 playback_loop() {
-    echo "Starting music playback loop..."
+    log_message "Starting music playback loop..."
     find "$DOWNLOADS_DIR" -maxdepth 1 -type f -delete 2>/dev/null
     
     while true; do
@@ -190,7 +159,7 @@ playback_loop() {
         download_track "$path"
         
         if ! play_track "$fullname"; then
-            echo "Skipping to next track..."
+            log_message "Skipping to next track..."
             sleep 1
             continue
         fi
@@ -198,7 +167,7 @@ playback_loop() {
         sleep 1
     done
 
-    kill_gwsocket
+    kill_process "$GWSOCKET_PID"
 }
 
 # Main execution
