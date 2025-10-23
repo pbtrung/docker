@@ -150,13 +150,7 @@ log_message() {
 play_track() {
     local fullname="$1"
     
-    # gst-launch-1.0 -e -t --force-position playbin3 uri="file://$fullname" \
-    #     audio-sink="audioresample ! audioconvert ! \
-    #                 audioamplify amplification=${linear_gain} clipping-method=clip ! \
-    #                 audio/x-raw,rate=48000,channels=2,format=S16LE ! \
-    #                 filesink location=$SNAPFIFO" \
-    #     2>&1 | process_gst_output >"$INFOFIFO" &
-    ffmpeg -y -hide_banner -loglevel error \
+    ffmpeg -y -hide_banner \
         -i "$fullname" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
         -f s16le -ac 2 -ar 48000 "$SNAPFIFO" 2>"$INFOFIFO" &
