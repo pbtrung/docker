@@ -153,7 +153,7 @@ play_track() {
     
     log_message "Analyzing loudness for $fullname ..."
     
-    gain_value=$(ffmpeg -y -i "$fullname" \
+    gain_value=$(ffmpeg -y -t 240 -i "$fullname" \
         -af "aformat=sample_rates=16000:channel_layouts=mono,loudnorm=I=-16:print_format=json" \
         -f null - 2>&1 | \
         awk '/^\{/,/^\}/' | \
