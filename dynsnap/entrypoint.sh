@@ -142,25 +142,55 @@ process_gst_output() {
     '
 }
 
+log_message() {
+    echo "$1" | tee "$INFOFIFO"
+}
+
 # Play a single track
 play_track() {
     local fullname="$1"
+    local gain_value linear_gain
+    
+    log_message "Analyzing loudness for $fullname ..."
+    
+    gain_value=$(ffmpeg -y -t 60 -i "$fullname" \
+        -af loudnorm=I=-16:print_format=json \
+        -f null - 2>&1 | \
+        awk '/^\{/,/^\}/' | jq -r ".target_offset")
+    
+    if [[ -z "$gain_value" || "$gain_value" == "null" ]]; then
+        log_message "Warning: Could not determine gain_value, using 0 dB"
+        gain_value=0
+    fi
+    
+    log_message "Calculated gain_value: ${gain_value} dB"
+    
+    linear_gain=$(echo "scale=10; e(l(10)*$gain_value/20)" | bc -l 2>/dev/null)
+    
+    if [[ -z "$linear_gain" || "$linear_gain" == "." || "$linear_gain" == "0" ]]; then
+        log_message "Warning: invalid conversion, defaulting to 1.0x gain"
+        linear_gain="1.0"
+    fi
+    
+    log_message "Applying linear gain factor: ${linear_gain}"
     
     gst-launch-1.0 -e -t --force-position playbin3 uri="file://$fullname" \
         audio-sink="audioresample ! audioconvert ! \
+                    audioamplify amplification=${linear_gain} clipping-method=clip ! \
                     audio/x-raw,rate=48000,channels=2,format=S16LE ! \
                     filesink location=$SNAPFIFO" \
         2>&1 | process_gst_output >"$INFOFIFO" &
     PIPELINE_PID=$!
     
     if ! wait $PIPELINE_PID; then
-        echo "Error: pipeline failed for $fullname"
+        log_message "Error: pipeline failed for $fullname"
         kill_pipeline
         rm -f "$fullname"
         return 1
     fi
     
     rm -f "$fullname"
+    log_message "Finished playing $fullname"
     return 0
 }
 
