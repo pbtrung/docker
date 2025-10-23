@@ -149,38 +149,17 @@ log_message() {
 # Play a single track
 play_track() {
     local fullname="$1"
-    local gain_value linear_gain
     
-    log_message "Analyzing loudness for $fullname ..."
-    
-    gain_value=$(ffmpeg -y -t 120 -i "$fullname" \
-        -af "aformat=sample_rates=22050:channel_layouts=mono,loudnorm=I=-16:print_format=json" \
-        -f null - 2>&1 | \
-        awk '/^\{/,/^\}/' | \
-        jq -r ".target_offset")
-    
-    if [[ -z "$gain_value" || "$gain_value" == "null" ]]; then
-        log_message "Warning: Could not determine gain_value, using 0 dB"
-        gain_value=0
-    fi
-    
-    log_message "Calculated gain_value: ${gain_value} dB"
-    
-    linear_gain=$(echo "scale=10; e(l(10)*$gain_value/20)" | bc -l 2>/dev/null)
-    
-    if [[ -z "$linear_gain" || "$linear_gain" == "." || "$linear_gain" == "0" ]]; then
-        log_message "Warning: invalid conversion, defaulting to 1.0x gain"
-        linear_gain="1.0"
-    fi
-    
-    log_message "Applying linear gain factor: ${linear_gain}"
-    
-    gst-launch-1.0 -e -t --force-position playbin3 uri="file://$fullname" \
-        audio-sink="audioresample ! audioconvert ! \
-                    audioamplify amplification=${linear_gain} clipping-method=clip ! \
-                    audio/x-raw,rate=48000,channels=2,format=S16LE ! \
-                    filesink location=$SNAPFIFO" \
-        2>&1 | process_gst_output >"$INFOFIFO" &
+    # gst-launch-1.0 -e -t --force-position playbin3 uri="file://$fullname" \
+    #     audio-sink="audioresample ! audioconvert ! \
+    #                 audioamplify amplification=${linear_gain} clipping-method=clip ! \
+    #                 audio/x-raw,rate=48000,channels=2,format=S16LE ! \
+    #                 filesink location=$SNAPFIFO" \
+    #     2>&1 | process_gst_output >"$INFOFIFO" &
+    ffmpeg -y -hide_banner -loglevel error \
+        -i "$fullname" \
+        -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
+        -f s16le -ac 2 -ar 48000 "$SNAPFIFO" 2>"$INFOFIFO" &
     PIPELINE_PID=$!
     
     if ! wait $PIPELINE_PID; then
