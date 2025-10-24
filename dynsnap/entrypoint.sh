@@ -120,10 +120,9 @@ kill_pipeline() {
 play_track() {
     local fullname="$1"
     
-    ffmpeg -y -hide_banner \
-        -i "$fullname" \
-        -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
-        -f s16le -ac 2 -ar 48000 "$SNAPFIFO" 2>"$INFOFIFO" &
+    gst-launch-1.0 -e -t playbin3 uri="file://$fullname" \
+        audio-filter="audioresample ! audioloudnorm loudness-target=-16.0 ! audioresample ! capsfilter caps=audio/x-raw,rate=48000,channels=2" \
+        audio-sink="audioconvert ! audio/x-raw,format=S16LE ! filesink location=$SNAPFIFO" &
     PIPELINE_PID=$!
     
     if ! wait $PIPELINE_PID; then
