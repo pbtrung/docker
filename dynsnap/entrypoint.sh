@@ -157,7 +157,7 @@ play_track() {
     gain_value=$(ffmpeg -y -t 120 -i "$fullname" \
         -af "aformat=sample_rates=22050:channel_layouts=mono,replaygain" \
         -f null - 2>&1 | \
-        grep -oP 'track_gain = \K-?[0-9]+\.?[0-9]*' | \
+        grep -oP 'track_gain = \K[+-]?[0-9]+\.?[0-9]*' | \
         head -n 1)
     
     if [[ -z "$gain_value" ]]; then
@@ -170,7 +170,7 @@ play_track() {
     
     gst-launch-1.0 -e -t --force-position playbin3 uri="file://$fullname" \
         audio-sink="audioresample ! audioconvert ! \
-                    rgvolume album-mode=false pre-amp=0.0 target-gain=${gain_value} fallback-gain=${gain_value} ! \
+                    rgvolume album-mode=false pre-amp=0.0 fallback-gain=${gain_value} ! \
                     audio/x-raw,rate=48000,channels=2,format=S16LE ! \
                     filesink location=$SNAPFIFO" \
         2>&1 | process_gst_output > "$INFOFIFO" &
