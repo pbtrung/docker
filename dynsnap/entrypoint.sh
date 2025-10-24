@@ -118,6 +118,10 @@ kill_pipeline() {
 
 process_gst_output() {
     stdbuf -oL awk '
+        /^FOUND TAG/ {
+            # Skip FOUND TAG lines
+            next
+        }
         /^[0-9]+:[0-9]{2}:[0-9]{2}\.[0-9] \/ [0-9]+:[0-9]{2}:[0-9]{2}\.[0-9]/ {
             # Progress update: overwrite the same line
             printf "\r%s", $0
@@ -125,7 +129,6 @@ process_gst_output() {
             progress_seen = 1
             next
         }
-
         {
             # Before printing metadata, ensure it starts on a new line
             if (progress_seen) {
@@ -135,7 +138,6 @@ process_gst_output() {
             print
             fflush()
         }
-
         END {
             # Ensure final newline at end of decoding
             if (progress_seen)
