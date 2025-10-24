@@ -116,13 +116,70 @@ kill_pipeline() {
     PIPELINE_PID=""
 }
 
+process_gst_output() {
+    stdbuf -oL awk '
+        /^[0-9]+:[0-9]{2}:[0-9]{2}\.[0-9] \/ [0-9]+:[0-9]{2}:[0-9]{2}\.[0-9]/ {
+            # Progress update: overwrite the same line
+            printf "\r%s", $0
+            fflush()
+            progress_seen = 1
+            next
+        }
+
+        {
+            # Before printing metadata, ensure it starts on a new line
+            if (progress_seen) {
+                printf "\n\n"
+                progress_seen = 0
+            }
+            print
+            fflush()
+        }
+
+        END {
+            # Ensure final newline at end of decoding
+            if (progress_seen)
+                printf "\n\n"
+            fflush()
+        }
+    '
+}
+
 # Play a single track
 play_track() {
     local fullname="$1"
+    local gain_value linear_gain
     
-    gst-launch-1.0 -e -t playbin3 uri="file://$fullname" \
-        audio-filter="audioresample ! audioloudnorm loudness-target=-16.0 ! audioresample ! capsfilter caps=audio/x-raw,rate=48000,channels=2" \
-        audio-sink="audioconvert ! audio/x-raw,format=S16LE ! filesink location=$SNAPFIFO" &
+    log_message "Analyzing loudness for $fullname ..."
+    
+    gain_value=$(ffmpeg -y -t 120 -i "$fullname" \
+        -af "aformat=sample_rates=22050:channel_layouts=mono,loudnorm=I=-16:print_format=json" \
+        -f null - 2>&1 | \
+        awk '/^\{/,/^\}/' | \
+        jq -r ".target_offset")
+    
+    if [[ -z "$gain_value" || "$gain_value" == "null" ]]; then
+        log_message "Warning: Could not determine gain_value, using 0 dB"
+        gain_value=0
+    fi
+    
+    log_message "Calculated gain_value: ${gain_value} dB"
+    
+    linear_gain=$(echo "scale=10; e(l(10)*$gain_value/20)" | bc -l 2>/dev/null)
+    
+    if [[ -z "$linear_gain" || "$linear_gain" == "." || "$linear_gain" == "0" ]]; then
+        log_message "Warning: invalid conversion, defaulting to 1.0x gain"
+        linear_gain="1.0"
+    fi
+    
+    log_message "Applying linear gain factor: ${linear_gain}"
+    
+    gst-launch-1.0 -e -t --force-position playbin3 uri="file://$fullname" \
+        audio-sink="audioresample ! audioconvert ! \
+                    audioamplify amplification=${linear_gain} clipping-method=clip ! \
+                    audio/x-raw,rate=48000,channels=2,format=S16LE ! \
+                    filesink location=$SNAPFIFO" \
+        2>&1 | process_gst_output >"$INFOFIFO" &
     PIPELINE_PID=$!
     
     if ! wait $PIPELINE_PID; then
