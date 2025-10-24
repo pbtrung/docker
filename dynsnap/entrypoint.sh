@@ -159,7 +159,8 @@ play_track() {
         -f null - 2>&1 | \
         grep -oP 'track_gain = \K[+-]?[0-9]+\.?[0-9]*' | \
         head -n 1)
-    
+        
+    gain_value=${gain_value#+}
     if [[ -z "$gain_value" ]]; then
         log_message "Warning: Could not determine gain_value, using 0 dB"
         gain_value=0
