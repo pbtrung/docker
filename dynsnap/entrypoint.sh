@@ -136,7 +136,7 @@ process_gst_output() {
             }
             
             # Before printing metadata, ensure it starts on a new line
-            # But skip \n\n if we're still in the initial pipeline setup
+            # But skip double newline if we are still in the initial pipeline setup
             if (progress_seen) {
                 if (prev_line !~ /^Setting pipeline to PLAYING/) {
                     printf "\n\n"
