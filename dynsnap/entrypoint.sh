@@ -130,13 +130,24 @@ process_gst_output() {
             next
         }
         {
+            # Skip duplicate lines (e.g., repeated metadata blocks)
+            if ($0 == prev_line) {
+                next
+            }
+            
             # Before printing metadata, ensure it starts on a new line
+            # But skip \n\n if we're still in the initial pipeline setup
             if (progress_seen) {
-                printf "\n\n"
+                if (prev_line !~ /^Setting pipeline to PLAYING/) {
+                    printf "\n\n"
+                } else {
+                    printf "\n"
+                }
                 progress_seen = 0
             }
             print
             fflush()
+            prev_line = $0
         }
         END {
             # Ensure final newline at end of decoding
