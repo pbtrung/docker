@@ -193,7 +193,8 @@ play_track() {
         -c:a copy \
         -f ogg \
         -content_type application/ogg \
-        icecast://source:hackme@localhost:8000/stream.ogg
+        icecast://source:hackme@localhost:8000/stream.ogg \
+        2>"$INFOFIFO" &
     PIPELINE_PID=$!
     
     if ! wait $PIPELINE_PID; then
