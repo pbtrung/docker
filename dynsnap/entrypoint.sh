@@ -190,12 +190,9 @@ play_track() {
 
     ffmpeg -re -i "$fullname" \
         -map 0:a:0 \
-        -af dynaudnorm=f=500:g=31:p=0.95 \
-        -ar 48000 -sample_fmt s16 -ac 2 \
-        -c:a flac \
-        -compression_level 3 \
-        -content_type application/ogg \
+        -c:a copy \
         -f ogg \
+        -content_type application/ogg \
         icecast://source:hackme@localhost:8000/stream.ogg
     PIPELINE_PID=$!
     
