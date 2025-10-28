@@ -26,7 +26,6 @@ COPY --from=build /root/gwsocket/gwsocket /usr/bin/
 WORKDIR /script
 COPY entrypoint.sh /script/
 
-RUN addgroup -S icecast && adduser -S -G icecast icecast
 RUN mkdir /music
 RUN mkdir -p /var/log/icecast
 RUN chown -R icecast:icecast /music
