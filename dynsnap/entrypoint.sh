@@ -189,6 +189,7 @@ play_track() {
     #     2>&1 | process_gst_output > "$INFOFIFO" &
 
     ffmpeg -re -i "$fullname" \
+        -map 0:a:0 \
         -af dynaudnorm=f=500:g=31:p=0.95 \
         -ar 48000 -sample_fmt s16 -ac 2 \
         -c:a flac \
