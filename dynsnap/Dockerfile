@@ -17,8 +17,7 @@ FROM alpine:edge
 
 RUN apk update && \
     apk --no-cache upgrade && \
-    apk --no-cache add wget coreutils gawk grep sqlite jq rclone \
-        gstreamer-tools gst-plugins-base gst-plugins-good \
+    apk --no-cache add wget coreutils sqlite jq rclone \
         ffmpeg icecast
         
 COPY --from=build /root/gwsocket/gwsocket /usr/bin/
@@ -27,9 +26,7 @@ WORKDIR /script
 COPY entrypoint.sh /script/
 
 RUN mkdir /music
-RUN mkdir -p /var/log/icecast
 RUN chown -R icecast:icecast /music
-RUN chown -R icecast:icecast /var/log/icecast
 USER icecast
 
 ENTRYPOINT ["/script/entrypoint.sh"]
