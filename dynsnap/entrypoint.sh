@@ -193,7 +193,7 @@ play_track() {
         -ar 48000 -sample_fmt s16 -ac 2 \
         -c:a flac \
         -compression_level 3 \
-        -content_type audio/flac \
+        -content_type application/ogg \
         -f ogg \
         icecast://source:hackme@localhost:8000/stream.ogg
     PIPELINE_PID=$!
