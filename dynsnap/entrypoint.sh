@@ -188,17 +188,18 @@ play_track() {
     #                 filesink location=$SNAPFIFO" \
     #     2>&1 | process_gst_output > "$INFOFIFO" &
 
-    gst-launch-1.0 -e -t --force-position \
-        filesrc location="$fullname" ! \
-        decodebin ! \
-        audioconvert ! \
-        audioresample ! \
+    AUDIO_FILTER="audioresample ! audioconvert ! \
         audio/x-raw,rate=48000,channels=2,format=S16LE ! \
-        rgvolume album-mode=false pre-amp=0.0 fallback-gain=${gain_value} ! \
-        audioconvert ! \
+        rgvolume album-mode=false pre-amp=0.0 fallback-gain=${gain_value}"
+    AUDIO_SINK="audioconvert ! \
         flacenc quality=3 ! \
         oggmux ! \
-        shout2send ip=127.0.0.1 port=8000 password=hackme mount=/stream.ogg \
+        shout2send ip=127.0.0.1 port=8000 password=hackme mount=/stream.ogg"
+    
+    gst-launch-1.0 -e -t --force-position \
+        playbin3 uri="file://$fullname" \
+        audio-filter="$AUDIO_FILTER" \
+        audio-sink="$AUDIO_SINK" \
         2>&1 | process_gst_output > "$INFOFIFO" &
     PIPELINE_PID=$!
     
