@@ -67,7 +67,8 @@ start_snapserver() {
         exit 1
     fi
     
-    snapserver --config "$SNAPSERVER_CONF" &
+    # snapserver --config "$SNAPSERVER_CONF" &
+    icecast -c "$SNAPSERVER_CONF" &
     SNAPSERVER_PID=$!
     log_message "Snapserver started with PID: $SNAPSERVER_PID"
     
@@ -161,31 +162,40 @@ process_gst_output() {
 # Play a single track
 play_track() {
     local fullname="$1"
-    local gain_value
+    # local gain_value
     
-    log_message "Analyzing ReplayGain for $fullname ..."
+    # log_message "Analyzing ReplayGain for $fullname ..."
     
-    gain_value=$(ffmpeg -y -t 120 -i "$fullname" \
-        -af "aformat=sample_rates=22050:channel_layouts=mono,replaygain" \
-        -f null - 2>&1 | \
-        grep -oP 'track_gain = \K[+-]?[0-9]+\.?[0-9]*' | \
-        head -n 1)
+    # gain_value=$(ffmpeg -y -t 120 -i "$fullname" \
+    #     -af "aformat=sample_rates=22050:channel_layouts=mono,replaygain" \
+    #     -f null - 2>&1 | \
+    #     grep -oP 'track_gain = \K[+-]?[0-9]+\.?[0-9]*' | \
+    #     head -n 1)
         
-    gain_value=${gain_value#+}
-    if [[ -z "$gain_value" ]]; then
-        log_message "Warning: Could not determine gain_value, using 0 dB"
-        gain_value=0
-    fi
+    # gain_value=${gain_value#+}
+    # if [[ -z "$gain_value" ]]; then
+    #     log_message "Warning: Could not determine gain_value, using 0 dB"
+    #     gain_value=0
+    # fi
     
-    log_message "Calculated track_gain: ${gain_value} dB"
-    log_message "Applying ReplayGain: ${gain_value} dB"
+    # log_message "Calculated track_gain: ${gain_value} dB"
+    # log_message "Applying ReplayGain: ${gain_value} dB"
     
-    gst-launch-1.0 -e -t --force-position playbin3 uri="file://$fullname" \
-        audio-sink="audioresample ! audioconvert ! \
-                    rgvolume album-mode=false pre-amp=0.0 fallback-gain=${gain_value} ! \
-                    audio/x-raw,rate=48000,channels=2,format=S16LE ! \
-                    filesink location=$SNAPFIFO" \
-        2>&1 | process_gst_output > "$INFOFIFO" &
+    # gst-launch-1.0 -e -t --force-position playbin3 uri="file://$fullname" \
+    #     audio-sink="audioresample ! audioconvert ! \
+    #                 rgvolume album-mode=false pre-amp=0.0 fallback-gain=${gain_value} ! \
+    #                 audio/x-raw,rate=48000,channels=2,format=S16LE ! \
+    #                 filesink location=$SNAPFIFO" \
+    #     2>&1 | process_gst_output > "$INFOFIFO" &
+
+    ffmpeg -re -i "$fullname" \
+        -af dynaudnorm=f=500:g=31:p=0.95 \
+        -ar 48000 -sample_fmt s16 -ac 2 \
+        -c:a flac \
+        -compression_level 3 \
+        -content_type audio/flac \
+        -f ogg \
+        icecast://source:hackme@localhost:8000/stream.ogg
     PIPELINE_PID=$!
     
     if ! wait $PIPELINE_PID; then
