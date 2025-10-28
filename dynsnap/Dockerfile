@@ -33,7 +33,9 @@ COPY entrypoint.sh /script/
 
 RUN addgroup -S icecast2 && adduser -S -G icecast2 icecast2
 RUN mkdir /music
+RUN mkdir -p /var/log/icecast2
 RUN chown -R icecast2:icecast2 /music
+RUN chown -R icecast2:icecast2 /var/log/icecast2
 USER icecast2
 
 ENTRYPOINT ["/script/entrypoint.sh"]
