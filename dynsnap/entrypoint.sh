@@ -12,8 +12,7 @@ log_message() {
 
 cleanup() {
     log_message "Cleaning up..."
-    # Close file descriptor 3
-    exec 3>&-
+    exec 3>&- 2>/dev/null || true
     pkill -P $$ ffmpeg 2>/dev/null || true
     pkill -P $$ icecast 2>/dev/null || true
     pkill -P $$ gwsocket 2>/dev/null || true
@@ -78,6 +77,9 @@ start_icecast() {
 }
 
 start_ffmpeg() {
+    # Close fd 3 if it's open (from previous run)
+    exec 3>&- 2>/dev/null || true
+    
     rm -f "$PCMFIFO"
     mkfifo "$PCMFIFO"
 
