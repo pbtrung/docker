@@ -47,8 +47,7 @@ load_config() {
 
 download_database() {
     log_message "Downloading database..."
-    if ! wget -O "$DB_PATH" "$DB_URL" 2>&1 \
-        | tee "$INFOFIFO"; then
+    if ! wget -O "$DB_PATH" "$DB_URL" 2>&1 | tee "$INFOFIFO"; then
         log_message \
             "Error: Failed to download database from $DB_URL"
         exit 1
@@ -124,8 +123,7 @@ download_track() {
     
     log_message "Downloading: $path"
     if ! rclone --config "$RCLONE_CONF" copy "$path" \
-        "$DOWNLOADS_DIR/" -v --stats 5s 2>&1 \
-        | tee "$INFOFIFO"; then
+        "$DOWNLOADS_DIR/" -v --stats 5s 2>&1 | tee "$INFOFIFO"; then
         log_message "Error: rclone failed to download $path"
         return 1
     fi
@@ -196,8 +194,7 @@ start_gwsocket() {
     log_message "Creating FIFO and starting gwsocket..."
     rm -f "$INFOFIFO"
     mkfifo "$INFOFIFO"
-    gwsocket --port=9000 --addr=0.0.0.0 --std \
-        < "$INFOFIFO" &
+    gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO" &
     GWSOCKET_PID=$!
     log_message "gwsocket started with PID: $GWSOCKET_PID"
     
@@ -214,6 +211,12 @@ playback_loop() {
         2>/dev/null || true
     
     while true; do
+        # Check if ffmpeg is still running
+        if ! kill -0 "$FFMPEG_PID" 2>/dev/null; then
+            log_message "FFmpeg died, restarting..."
+            start_ffmpeg
+        fi
+        
         local path=$(get_random_track)
         local fname=${path##*/}
         local fullname="$DOWNLOADS_DIR/$fname"
