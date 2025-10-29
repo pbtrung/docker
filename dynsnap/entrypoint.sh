@@ -12,6 +12,8 @@ log_message() {
 
 cleanup() {
     log_message "Cleaning up..."
+    # Close file descriptor 3
+    exec 3>&-
     pkill -P $$ ffmpeg 2>/dev/null || true
     pkill -P $$ icecast 2>/dev/null || true
     pkill -P $$ gwsocket 2>/dev/null || true
@@ -79,15 +81,12 @@ start_icecast() {
 start_ffmpeg() {
     rm -f "$PCMFIFO"
     mkfifo "$PCMFIFO"
-    log_message "FIFO created at $PCMFIFO (ffmpeg will start on first track)"
-}
 
-ensure_ffmpeg_running() {
-    if [ -n "$FFMPEG_PID" ] && kill -0 $FFMPEG_PID 2>/dev/null; then
-        return 0
-    fi
-    
     log_message "Starting ffmpeg encoder..."
+
+    # This keeps the FIFO write-end open permanently
+    exec 3>"$PCMFIFO"
+    
     ffmpeg -nostdin -hide_banner -loglevel warning -re \
         -f s16le -ar 48000 -ac 2 -i "$PCMFIFO" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
@@ -152,8 +151,6 @@ play_track() {
     fi
     
     log_message "Detected format: $format"
-
-    ensure_ffmpeg_running
     
     case "$format" in
         opus)
