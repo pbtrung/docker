@@ -130,6 +130,11 @@ play_track() {
         log_message "Error: File not found: $fullname"
         return 1
     fi
+
+    if ! kill -0 $FFMPEG_PID 2>/dev/null; then
+        log_message "Error: ffmpeg is not running"
+        return 1
+    fi
     
     log_message "Playing: $fullname"
     
