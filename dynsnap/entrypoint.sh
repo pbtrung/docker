@@ -84,15 +84,13 @@ start_ffmpeg() {
 
     log_message "Starting ffmpeg encoder..."
 
-    # This keeps the FIFO write-end open permanently
-    exec 3>"$PCMFIFO"
-    
+    # Start ffmpeg first (in background)
     ffmpeg -nostdin -hide_banner -loglevel warning -re \
         -f s16le -ar 48000 -ac 2 -i "$PCMFIFO" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
         -ar 48000 -sample_fmt s16 -ac 2 \
         -c:a flac -compression_level 6 \
-        -f ogg -content_type audio/ogg \
+        -f ogg -content_type application/ogg \
         icecast://source:hackme@localhost:8000/stream.ogg &
     FFMPEG_PID=$!
     log_message "FFmpeg started with PID: $FFMPEG_PID"
@@ -102,6 +100,11 @@ start_ffmpeg() {
         log_message "Error: ffmpeg failed to start"
         exit 1
     fi
+    
+    # Now open the FIFO write-end to keep it open permanently
+    # This must happen AFTER ffmpeg has opened the read-end
+    exec 3>"$PCMFIFO"
+    log_message "FIFO holder established"
 }
 
 get_random_track() {
