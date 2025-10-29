@@ -79,9 +79,16 @@ start_icecast() {
 start_ffmpeg() {
     rm -f "$PCMFIFO"
     mkfifo "$PCMFIFO"
+    log_message "FIFO created at $PCMFIFO (ffmpeg will start on first track)"
+}
 
+ensure_ffmpeg_running() {
+    if [ -n "$FFMPEG_PID" ] && kill -0 $FFMPEG_PID 2>/dev/null; then
+        return 0
+    fi
+    
     log_message "Starting ffmpeg encoder..."
-    ffmpeg -nostdin -hide_banner -loglevel error -re \
+    ffmpeg -nostdin -hide_banner -loglevel warning -re \
         -f s16le -ar 48000 -ac 2 -i "$PCMFIFO" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
         -ar 48000 -sample_fmt s16 -ac 2 \
@@ -130,11 +137,6 @@ play_track() {
         log_message "Error: File not found: $fullname"
         return 1
     fi
-
-    if ! kill -0 $FFMPEG_PID 2>/dev/null; then
-        log_message "Error: ffmpeg is not running"
-        return 1
-    fi
     
     log_message "Playing: $fullname"
     
@@ -150,6 +152,8 @@ play_track() {
     fi
     
     log_message "Detected format: $format"
+
+    ensure_ffmpeg_running
     
     case "$format" in
         opus)
