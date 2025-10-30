@@ -1,4 +1,4 @@
-#!/bin/ash
+#!/bin/bash
 
 set -eu
 
@@ -62,7 +62,7 @@ start_icecast() {
         exit 1
     fi
     
-    icecast -c "$ICECAST_CONF" 2>&1 | tee "$INFOFIFO" &
+    icecast2 -c "$ICECAST_CONF" 2>&1 | tee "$INFOFIFO" &
     ICECAST_PID=$!
     log_message "Icecast started with PID: $ICECAST_PID"
     
