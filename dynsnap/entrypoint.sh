@@ -143,8 +143,7 @@ play_track() {
     log_message "Playing: $fullname"
     
     # Use ffmpeg with -re for all formats
-    if ! ffmpeg -nostdin -hide_banner -loglevel error \
-        -re -i "$fullname" \
+    if ! ffmpeg -nostdin -hide_banner -re -i "$fullname" \
         -f s16le -ar 48000 -ac 2 - 2>"$INFOFIFO" \
         > "$PCMFIFO"; then
         log_message "Error: ffmpeg playback failed"
