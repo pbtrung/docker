@@ -22,6 +22,7 @@ COPY --from=build /root/gwsocket/gwsocket /usr/bin/
 RUN wget https://www.rocketbroadcaster.com/streaming-audio-server/downloads/ubuntu-14.04/rsas-1.0.7-linux_amd64.tar.gz && \
     tar -xvzf rsas-1.0.7-linux_amd64.tar.gz && \
     cd rsas-1.0.7-linux_amd64 && \
+    sed -i 's/SYSTEMD=1/SYSTEMD=0/g' install.sh && \
     ./install.sh
 
 WORKDIR /script
