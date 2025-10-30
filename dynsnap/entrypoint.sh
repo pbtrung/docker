@@ -144,9 +144,7 @@ play_track() {
     
     if ! gst-launch-1.0 -e -t \
         playbin3 uri="file://${fullname}" \
-        audio-sink="audioresample ! audioconvert ! \
-            audio/x-raw,format=S16LE,rate=48000,channels=2 ! \
-            fdsink fd=1" \
+        audio-sink="audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=2 ! fdsink fd=1" \
         video-sink=fakesink 2>"$INFOFIFO" > "$PCMFIFO"; then
         log_message "Error: gst-launch playback failed"
         rm -f "$fullname"
