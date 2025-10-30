@@ -21,6 +21,6 @@ COPY --from=build /root/gwsocket/gwsocket /usr/bin/
 WORKDIR /script
 COPY entrypoint.sh /script/
 RUN mkdir /music
-RUN chown -R icecast2:icecast2 /music
+RUN chown -R icecast2:icecast /music
 USER icecast2
 ENTRYPOINT ["/script/entrypoint.sh"]
