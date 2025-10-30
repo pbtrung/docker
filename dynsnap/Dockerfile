@@ -18,9 +18,16 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
         
 COPY --from=build /root/gwsocket/gwsocket /usr/bin/
+
+RUN wget https://www.rocketbroadcaster.com/streaming-audio-server/downloads/ubuntu-14.04/rsas-1.0.7-linux_amd64.tar.gz && \
+    tar -xvzf rsas-1.0.7-linux_amd64.tar.gz && \
+    cd rsas-1.0.7-linux_amd64 && \
+    ./install.sh
+
 WORKDIR /script
 COPY entrypoint.sh /script/
+
 RUN mkdir /music
-RUN chown -R icecast2:icecast /music
-USER icecast2
+RUN chown -R rsas:rsas /music
+USER rsas
 ENTRYPOINT ["/script/entrypoint.sh"]
