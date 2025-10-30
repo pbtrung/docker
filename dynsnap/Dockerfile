@@ -48,8 +48,9 @@ RUN wget ${RSAS_URL} && \
     tar -xzf rsas-${RSAS_VERSION}-linux_amd64.tar.gz && \
     cd rsas-${RSAS_VERSION}-linux_amd64 && \
     sed -i 's/SYSTEMD=1/SYSTEMD=0/g' install.sh && \
-    sed -i 's/addgroup/groupadd/g' install.sh && \
-    sed -i 's/adduser/useradd -m -g/g' install.sh && \
+    sed -i 's/addgroup --system --quiet/groupadd -r/g' install.sh && \
+    sed -i 's/adduser --system --quiet --disabled-password --disabled-login/useradd -r -s \/bin\/false/g' install.sh && \
+    sed -i 's/--home \/usr\/share\/rsas\/webroot --no-create-home --ingroup rsas/-d \/usr\/share\/rsas\/webroot -M -g rsas/g' install.sh && \
     ./install.sh && \
     cd .. && \
     rm -rf rsas-${RSAS_VERSION}-linux_amd64.tar.gz rsas-${RSAS_VERSION}-linux_amd64
