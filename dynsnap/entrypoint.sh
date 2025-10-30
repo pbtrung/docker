@@ -103,8 +103,8 @@ play_track() {
 
     log_message "Streaming to Icecast: $fullname"
 
-    if ! opusdec --rate 48000 --force-stereo "$fullname" - 2>"$INFOFIFO" | \
-        ffmpeg -hide_banner -f s16le -ar 48000 -ac 2 -re -i - \
+    if ! ogg123 -d raw -f - "$fullname" 2>"$INFOFIFO" | \
+        ffmpeg -hide_banner -f s16le -ar 48000 -ac 2 -i - \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
         -ar 48000 -sample_fmt s16 -ac 2 \
         -c:a flac -compression_level 6 \
