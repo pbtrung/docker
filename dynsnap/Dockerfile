@@ -35,7 +35,7 @@ RUN apt-get update && \
         sqlite3 \
         jq \
         rclone \
-        ffmpeg
+        ffmpeg && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
