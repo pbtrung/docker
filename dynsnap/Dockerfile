@@ -35,10 +35,7 @@ RUN apt-get update && \
         sqlite3 \
         jq \
         rclone \
-        ffmpeg \
-        gstreamer1.0-tools \
-        gstreamer1.0-plugins-base \
-        gstreamer1.0-plugins-good && \
+        ffmpeg
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
