@@ -104,6 +104,7 @@ play_track() {
     log_message "Streaming to Icecast: $fullname"
 
     if ! ffmpeg -hide_banner -y -re -i "$fullname" \
+        -map 0:a:0 \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
         -ar 48000 -sample_fmt s16 -ac 2 \
         -c:a flac \
