@@ -86,7 +86,7 @@ start_ffmpeg() {
     log_message "Starting ffmpeg encoder..."
 
     # Start ffmpeg first (in background)
-    ffmpeg -nostdin -hide_banner -loglevel warning -re \
+    ffmpeg -nostdin -hide_banner -loglevel warning \
         -f s16le -ar 48000 -ac 2 -i "$PCMFIFO" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
         -ar 48000 -sample_fmt s16 -ac 2 \
