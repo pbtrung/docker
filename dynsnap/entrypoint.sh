@@ -104,6 +104,7 @@ play_track() {
     log_message "Streaming to Icecast: $fullname"
 
     if ! ffmpeg -nostdin -hide_banner -re -i "$fullname" \
+        -map 0:a:0 \
         -c:a copy \
         -f ogg -content_type application/ogg \
         icecast://source:hackme@localhost:8000/stream.ogg \
