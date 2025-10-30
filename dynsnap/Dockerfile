@@ -1,4 +1,4 @@
-FROM ubuntu:rolling AS build
+FROM ubuntu:devel AS build
 
 ARG GWSOCKET_REPO=https://github.com/allinurl/gwsocket
 
@@ -22,7 +22,7 @@ RUN git clone ${GWSOCKET_REPO} && \
     make && \
     strip gwsocket
 
-FROM ubuntu:rolling
+FROM ubuntu:devel
 
 ARG RSAS_VERSION=1.0.7
 ARG RSAS_URL=https://www.rocketbroadcaster.com/streaming-audio-server/downloads/ubuntu-14.04/rsas-${RSAS_VERSION}-linux_amd64.tar.gz
