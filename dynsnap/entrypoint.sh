@@ -166,7 +166,7 @@ stream_track() {
             ;;
         *)
             log_message "Format $audio_format detected"
-            ffmpeg -nostdin -hide_banner -loglevel error \
+            ffmpeg -nostdin -hide_banner \
                 -i "$local_file" -map 0:a:0 \
                 -f s16le -ar 48000 -ac 2 - 2>"$INFOFIFO" \
                 > "$PCMFIFO"
