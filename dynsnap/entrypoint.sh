@@ -142,12 +142,11 @@ play_track() {
     
     log_message "Playing: $fullname"
     
-    if ! gst-launch-1.0 -e -t playbin3 uri="file://$fullname" \
-        audio-sink="audioresample ! audioconvert ! \
-                    audio/x-raw,rate=48000,channels=2,format=S16LE ! \
-                    filesink location=$PCMFIFO" \
-        video-sink=fakesink 2>"$INFOFIFO"; then
-        log_message "Error: gst-launch playback failed"
+    # Use ffmpeg with -re for all formats
+    if ! ffmpeg -nostdin -hide_banner -re -i "$fullname" \
+        -f s16le -ar 48000 -ac 2 - \
+        2>"$INFOFIFO" > "$PCMFIFO"; then
+        log_message "Error: ffmpeg playback failed"
         rm -f "$fullname"
         return 1
     fi
