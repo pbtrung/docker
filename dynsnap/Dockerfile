@@ -35,9 +35,6 @@ RUN apt-get update && \
         sqlite3 \
         jq \
         rclone \
-        vorbis-tools \
-        opus-tools \
-        mpg123 \
         ffmpeg && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*

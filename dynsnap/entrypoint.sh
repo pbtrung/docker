@@ -103,13 +103,15 @@ play_track() {
 
     log_message "Streaming to Icecast: $fullname"
 
-    if ! ogg123 -d raw -f - "$fullname" 2>"$INFOFIFO" | \
-        ffmpeg -hide_banner -f s16le -ar 48000 -ac 2 -i - \
+    if ! ffmpeg -hide_banner -y -re -i "$fullname" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
         -ar 48000 -sample_fmt s16 -ac 2 \
-        -c:a flac -compression_level 6 \
-        -f ogg -content_type application/ogg \
-        "icecast://source:hackme@localhost:8000/stream.ogg"; then
+        -c:a flac \
+        -compression_level 6 \
+        -f ogg \
+        -content_type audio/ogg \
+        "icecast://source:hackme@localhost:8000/stream.ogg" \
+        2>"$INFOFIFO"; then
         log_message "Error: ffmpeg streaming failed"
         rm -f "$fullname"
         return 1
