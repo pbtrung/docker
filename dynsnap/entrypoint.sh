@@ -166,7 +166,7 @@ play_track() {
             ;;
         mp3)
             if ! mpg123 --rate 48000 --encoding s16 \
-                --stereo -s "$fullname" 2>"$INFOFIFO" \
+                --stereo --long-tag -v -s "$fullname" 2>"$INFOFIFO" \
                 > "$PCMFIFO"; then
                 log_message "Error: mpg123 failed"
                 rm -f "$fullname"
