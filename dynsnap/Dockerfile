@@ -1,34 +1,63 @@
 FROM ubuntu:devel AS build
+
+ARG GWSOCKET_REPO=https://github.com/allinurl/gwsocket
+
 RUN apt-get update && \
     apt-get upgrade -y && \
-    apt-get install -y build-essential git pkg-config autoconf automake bash
-WORKDIR /root
-RUN git clone https://github.com/allinurl/gwsocket && \
+    apt-get install -y \
+        build-essential \
+        git \
+        pkg-config \
+        autoconf \
+        automake \
+        bash && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+RUN git clone ${GWSOCKET_REPO} && \
     cd gwsocket && \
     autoreconf -fiv && \
     ./configure && \
-    make
+    make && \
+    strip gwsocket
 
 FROM ubuntu:devel
+
+ARG RSAS_VERSION=1.0.7
+ARG RSAS_URL=https://www.rocketbroadcaster.com/streaming-audio-server/downloads/ubuntu-14.04/rsas-${RSAS_VERSION}-linux_amd64.tar.gz
+
 RUN apt-get update && \
     apt-get upgrade -y && \
-    apt-get install -y wget coreutils sqlite3 jq rclone \
-        ffmpeg icecast2 opus-tools mpg123 && \
+    apt-get install -y \
+        wget \
+        coreutils \
+        sqlite3 \
+        jq \
+        rclone \
+        ffmpeg \
+        gstreamer1.0-tools \
+        gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-good && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
-        
-COPY --from=build /root/gwsocket/gwsocket /usr/bin/
 
-RUN wget https://www.rocketbroadcaster.com/streaming-audio-server/downloads/ubuntu-14.04/rsas-1.0.7-linux_amd64.tar.gz && \
-    tar -xvzf rsas-1.0.7-linux_amd64.tar.gz && \
-    cd rsas-1.0.7-linux_amd64 && \
+COPY --from=build /build/gwsocket/gwsocket /usr/bin/gwsocket
+
+RUN wget ${RSAS_URL} && \
+    tar -xzf rsas-${RSAS_VERSION}-linux_amd64.tar.gz && \
+    cd rsas-${RSAS_VERSION}-linux_amd64 && \
     sed -i 's/SYSTEMD=1/SYSTEMD=0/g' install.sh && \
-    ./install.sh
+    ./install.sh && \
+    cd .. && \
+    rm -rf rsas-${RSAS_VERSION}-linux_amd64.tar.gz rsas-${RSAS_VERSION}-linux_amd64
 
 WORKDIR /script
 COPY entrypoint.sh /script/
+RUN chmod +x /script/entrypoint.sh && \
+    mkdir -p /music && \
+    chown -R rsas:rsas /music /script
 
-RUN mkdir /music
-RUN chown -R rsas:rsas /music
 USER rsas
+
 ENTRYPOINT ["/script/entrypoint.sh"]
