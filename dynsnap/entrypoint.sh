@@ -31,6 +31,7 @@ load_config() {
     RCLONE_CONF=$(jq -r '.rclone_conf' "$config_file")
     INFOFIFO=$(jq -r '.infofifo' "$config_file")
     DB_PATH=$(jq -r '.db_path' "$config_file")
+    PCMFIFO=$(jq -r '.pcmfifo' "$config_file")
 
     log_message "=== Configuration ==="
     log_message "DB_URL: $DB_URL"
@@ -39,6 +40,7 @@ load_config() {
     log_message "RCLONE_CONF: $RCLONE_CONF"
     log_message "DB_PATH: $DB_PATH"
     log_message "INFOFIFO: $INFOFIFO"
+    log_message "PCMFIFO: $PCMFIFO"
     log_message "===================="
 }
 
@@ -153,19 +155,19 @@ stream_track() {
     case "$audio_format" in
         opus)
             opusdec --rate 48000 --force-stereo \
-                "$fullname" - 2>"$INFOFIFO" > "$PCMFIFO"
+                "$local_file" - 2>"$INFOFIFO" > "$PCMFIFO"
             stream_result=$?
             ;;
         mp3)
             mpg123 --rate 48000 --encoding s16 \
-                --stereo --long-tag -v -s "$fullname" \
+                --stereo --long-tag -v -s "$local_file" \
                 2>"$INFOFIFO" > "$PCMFIFO"
             stream_result=$?
             ;;
         *)
             log_message "Format $audio_format detected"
             ffmpeg -nostdin -hide_banner -loglevel error \
-                -i "$fullname" -map 0:a:0 \
+                -i "$local_file" -map 0:a:0 \
                 -f s16le -ar 48000 -ac 2 - 2>"$INFOFIFO" \
                 > "$PCMFIFO"
             stream_result=$?
