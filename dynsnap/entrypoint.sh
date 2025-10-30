@@ -4,6 +4,7 @@ set -eu
 
 RSAS_PID=""
 GWSOCKET_PID=""
+FFMPEG_PID=""
 
 log_message() {
     echo "$1" | tee "$INFOFIFO" 2>/dev/null || echo "$1"
@@ -11,10 +12,11 @@ log_message() {
 
 cleanup() {
     log_message "Cleaning up..."
+    exec 3>&- 2>/dev/null || true
     pkill -P $$ ffmpeg 2>/dev/null || true
     pkill -P $$ rsas 2>/dev/null || true
     pkill -P $$ gwsocket 2>/dev/null || true
-    rm -f "$INFOFIFO" 2>/dev/null || true
+    rm -f "$INFOFIFO" "$PCMFIFO" 2>/dev/null || true
     exit 0
 }
 
@@ -69,6 +71,36 @@ start_rsas() {
     log_message "rsas is running successfully"
 }
 
+start_ffmpeg() {
+    # Close fd 3 if it's open (from previous run)
+    exec 3>&- 2>/dev/null || true
+    
+    rm -f "$PCMFIFO"
+    mkfifo "$PCMFIFO"
+
+    log_message "Starting ffmpeg encoder..."
+
+    # Start ffmpeg first (in background)
+    ffmpeg -nostdin -hide_banner -loglevel error \
+        -f s16le -ar 48000 -ac 2 -i "$PCMFIFO" \
+        -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0,arealtime" \
+        -ar 48000 -sample_fmt s16 -ac 2 \
+        -c:a flac -compression_level 6 \
+        -f ogg -content_type application/ogg \
+        icecast://source:hackme@localhost:8000/stream.ogg &
+    FFMPEG_PID=$!
+    log_message "FFmpeg started with PID: $FFMPEG_PID"
+    
+    sleep 1
+    if ! kill -0 $FFMPEG_PID 2>/dev/null; then
+        log_message "Error: ffmpeg failed to start"
+        exit 1
+    fi
+    
+    exec 3>"$PCMFIFO"
+    log_message "FIFO holder established"
+}
+
 get_random_track() {
     local total
     total=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM files;")
@@ -91,15 +123,6 @@ download_track() {
         return 1
     fi
     return 0
-}
-
-pipe_to_rsas() {
-    ffmpeg -nostdin -hide_banner -f s16le -ar 48000 -ac 2 -i - \
-        -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0,arealtime" \
-        -ar 48000 -sample_fmt s16 -ac 2 \
-        -c:a flac -compression_level 6 \
-        -f ogg -content_type application/ogg \
-        "icecast://source:hackme@localhost:8000/stream.ogg"
 }
 
 stream_track() {
@@ -130,20 +153,21 @@ stream_track() {
     case "$audio_format" in
         opus)
             opusdec --rate 48000 --force-stereo \
-                "$local_file" - 2>"$INFOFIFO" | pipe_to_rsas
+                "$fullname" - 2>"$INFOFIFO" > "$PCMFIFO"
             stream_result=$?
             ;;
         mp3)
             mpg123 --rate 48000 --encoding s16 \
-                --stereo --long-tag -v -s "$local_file" \
-                2>"$INFOFIFO" | pipe_to_rsas
+                --stereo --long-tag -v -s "$fullname" \
+                2>"$INFOFIFO" > "$PCMFIFO"
             stream_result=$?
             ;;
         *)
-            log_message "Format $audio_format detected, converting with ffmpeg"
-            ffmpeg -nostdin -hide_banner -i "$local_file" \
-                -map 0:a:0 -f s16le -ar 48000 -ac 2 - \
-                2>"$INFOFIFO" | pipe_to_rsas
+            log_message "Format $audio_format detected"
+            ffmpeg -nostdin -hide_banner -loglevel error \
+                -i "$fullname" -map 0:a:0 \
+                -f s16le -ar 48000 -ac 2 - 2>"$INFOFIFO" \
+                > "$PCMFIFO"
             stream_result=$?
             ;;
     esac
@@ -179,6 +203,11 @@ playback_loop() {
     find "$DOWNLOADS_DIR" -maxdepth 1 -type f -delete 2>/dev/null || true
 
     while true; do
+        if ! kill -0 "$FFMPEG_PID" 2>/dev/null; then
+            log_message "FFmpeg died, restarting..."
+            start_ffmpeg
+        fi
+
         local remote_path filename local_file
         remote_path=$(get_random_track)
         filename=${remote_path##*/}
@@ -205,6 +234,7 @@ main() {
     start_gwsocket
     download_database
     start_rsas
+    start_ffmpeg
     playback_loop
 }
 
