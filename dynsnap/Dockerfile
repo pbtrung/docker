@@ -35,6 +35,8 @@ RUN apt-get update && \
         sqlite3 \
         jq \
         rclone \
+        opus-tools \
+        mpg123 \
         ffmpeg && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
