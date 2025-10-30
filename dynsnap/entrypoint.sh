@@ -142,50 +142,15 @@ play_track() {
     
     log_message "Playing: $fullname"
     
-    local format=$(ffprobe -v error -select_streams a:0 \
-        -show_entries stream=codec_name \
-        -of default=noprint_wrappers=1:nokey=1 \
-        "$fullname" 2>/dev/null)
-    
-    if [ -z "$format" ]; then
-        log_message "Error: Could not determine audio format"
+    # Use ffmpeg with -re for all formats
+    if ! ffmpeg -nostdin -hide_banner -loglevel error \
+        -re -i "$fullname" \
+        -f s16le -ar 48000 -ac 2 - 2>"$INFOFIFO" \
+        > "$PCMFIFO"; then
+        log_message "Error: ffmpeg playback failed"
         rm -f "$fullname"
         return 1
     fi
-    
-    log_message "Detected format: $format"
-    
-    case "$format" in
-        opus)
-            if ! opusdec --rate 48000 --force-stereo \
-                "$fullname" - 2>"$INFOFIFO" > "$PCMFIFO"; then
-                log_message "Error: opusdec failed"
-                rm -f "$fullname"
-                return 1
-            fi
-            ;;
-        mp3)
-            if ! mpg123 --rate 48000 --encoding s16 \
-                --stereo --long-tag -v -s "$fullname" 2>"$INFOFIFO" \
-                > "$PCMFIFO"; then
-                log_message "Error: mpg123 failed"
-                rm -f "$fullname"
-                return 1
-            fi
-            ;;
-        *)
-            log_message \
-                "Unsupported format: $format (converting with ffmpeg)"
-            if ! ffmpeg -nostdin -hide_banner \
-                -loglevel error -i "$fullname" \
-                -f s16le -ar 48000 -ac 2 - 2>"$INFOFIFO" \
-                > "$PCMFIFO"; then
-                log_message "Error: ffmpeg conversion failed"
-                rm -f "$fullname"
-                return 1
-            fi
-            ;;
-    esac
     
     rm -f "$fullname"
     log_message "Finished playing: $fullname"
