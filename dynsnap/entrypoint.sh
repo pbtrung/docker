@@ -205,11 +205,6 @@ playback_loop() {
     find "$DOWNLOADS_DIR" -maxdepth 1 -type f -delete 2>/dev/null || true
 
     while true; do
-        if ! kill -0 "$FFMPEG_PID" 2>/dev/null; then
-            log_message "FFmpeg died, restarting..."
-            start_ffmpeg
-        fi
-
         local remote_path filename local_file
         remote_path=$(get_random_track)
         filename=${remote_path##*/}
@@ -219,6 +214,11 @@ playback_loop() {
             log_message "Download failed, skipping to next track..."
             sleep 2
             continue
+        fi
+
+        if ! kill -0 "$FFMPEG_PID" 2>/dev/null; then
+            log_message "FFmpeg died, restarting..."
+            start_ffmpeg
         fi
 
         if ! stream_track "$local_file"; then
