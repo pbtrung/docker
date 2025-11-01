@@ -119,11 +119,31 @@ download_track() {
     local remote_path="$1"
 
     log_message "Downloading: $remote_path"
+    
+    (
+        while kill -0 $$ 2>/dev/null; do
+            # Generate 1 second of silence: 48000 Hz * 2 channels * 2 bytes
+            dd if=/dev/zero bs=192000 count=1 2>/dev/null
+        done
+    ) > "$PCMFIFO" &
+    local silence_pid=$!
+    
+    # Download the track
+    local download_result=0
     if ! rclone --config "$RCLONE_CONF" copy "$remote_path" \
         "$DOWNLOADS_DIR/" -v --stats 5s 2>&1 | tee "$INFOFIFO"; then
         log_message "Error: rclone failed to download $remote_path"
+        download_result=1
+    fi
+    
+    # Stop silence generation
+    kill $silence_pid 2>/dev/null
+    wait $silence_pid 2>/dev/null
+    
+    if [ $download_result -ne 0 ]; then
         return 1
     fi
+    
     return 0
 }
 
