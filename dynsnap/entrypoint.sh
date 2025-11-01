@@ -4,9 +4,13 @@ set -eu
 
 ICECAST_PID=""
 GWSOCKET_PID=""
+INFOFIFO=""
 
 log_message() {
-    echo "$1" | tee "$INFOFIFO" 2>/dev/null || echo "$1"
+    echo "$1"
+    if [ -n "$INFOFIFO" ] && [ -p "$INFOFIFO" ]; then
+        echo "$1" > "$INFOFIFO" 2>/dev/null || true
+    fi
 }
 
 cleanup() {
@@ -14,7 +18,9 @@ cleanup() {
     pkill -P $$ ffmpeg 2>/dev/null || true
     pkill -P $$ icecast 2>/dev/null || true
     pkill -P $$ gwsocket 2>/dev/null || true
-    rm -f "$INFOFIFO" 2>/dev/null || true
+    if [ -n "$INFOFIFO" ] && [ -e "$INFOFIFO" ]; then
+        rm -f "$INFOFIFO" 2>/dev/null || true
+    fi
     exit 0
 }
 
@@ -38,6 +44,21 @@ load_config() {
     log_message "DB_PATH: $DB_PATH"
     log_message "INFOFIFO: $INFOFIFO"
     log_message "===================="
+}
+
+start_gwsocket() {
+    log_message "Creating FIFO and starting gwsocket..."
+    rm -f "$INFOFIFO"
+    mkfifo "$INFOFIFO"
+    gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO" &
+    GWSOCKET_PID=$!
+    log_message "gwsocket started with PID: $GWSOCKET_PID"
+    
+    sleep 1
+    if ! kill -0 $GWSOCKET_PID 2>/dev/null; then
+        log_message "Error: gwsocket failed to start"
+        exit 1
+    fi
 }
 
 download_database() {
@@ -126,25 +147,9 @@ play_track() {
     return 0
 }
 
-start_gwsocket() {
-    log_message "Creating FIFO and starting gwsocket..."
-    rm -f "$INFOFIFO"
-    mkfifo "$INFOFIFO"
-    gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO" &
-    GWSOCKET_PID=$!
-    log_message "gwsocket started with PID: $GWSOCKET_PID"
-    
-    sleep 1
-    if ! kill -0 $GWSOCKET_PID 2>/dev/null; then
-        log_message "Error: gwsocket failed to start"
-        exit 1
-    fi
-}
-
 playback_loop() {
     log_message "Starting music playback loop..."
-    find "$DOWNLOADS_DIR" -maxdepth 1 -type f -delete \
-        2>/dev/null || true
+    find "$DOWNLOADS_DIR" -maxdepth 1 -type f -delete 2>/dev/null || true
     
     while true; do
         local path=$(get_random_track)
