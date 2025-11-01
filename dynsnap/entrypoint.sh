@@ -113,41 +113,40 @@ get_random_track() {
     sqlite3 "$DB_PATH" "SELECT path FROM files WHERE id = $random_id;"
 }
 
-get_local_filename() {
-    local remote_path="$1"
-    local filename="${remote_path##*/}"
-    echo "$DOWNLOADS_DIR/$filename"
-}
-
-download_track_async() {
-    local remote_path="$1"
-    local local_file="$2"
-    local filename="${remote_path##*/}"
-    
-    log_message "Pre-buffering: $remote_path"
-    (
-        if rclone --config "$RCLONE_CONF" copy "$remote_path" \
-            "$DOWNLOADS_DIR/" -v --stats 5s 2>&1 | tee "$INFOFIFO"; then
-            log_message "Pre-buffer complete: $filename"
-        else
-            log_message "Pre-buffer failed: $filename"
-            rm -f "$local_file"
-        fi
-    ) &
-    echo $!
-}
-
-download_track_sync() {
+download_track() {
     local remote_path="$1"
     log_message "Downloading: $remote_path"
     
-    if rclone --config "$RCLONE_CONF" copy "$remote_path" \
+    (
+        log_message "Starting silence insertion during download..."
+        local silence_count=0
+        while kill -0 $$ 2>/dev/null && kill -0 $FFMPEG_PID 2>/dev/null; do
+            # 48000 Hz * 2 channels * 2 bytes * 5 sec = 960000 bytes
+            dd if=/dev/zero bs=960000 count=1 2>/dev/null
+            silence_count=$((silence_count + 1))
+            log_message "Silence chunk $silence_count inserted (5 seconds)"
+            sleep 4.8
+        done
+        log_message "Silence insertion stopped after $silence_count chunks"
+    ) > "$PCMFIFO" &
+    local silence_pid=$!
+    log_message "Silence generator started with PID: $silence_pid"
+    
+    # Perform download
+    local download_result=0
+    if ! rclone --config "$RCLONE_CONF" copy "$remote_path" \
         "$DOWNLOADS_DIR/" -v --stats 5s 2>&1 | tee "$INFOFIFO"; then
-        return 0
-    else
-        log_message "Error: Download failed"
-        return 1
+        log_message "Error: rclone failed to download $remote_path"
+        download_result=1
     fi
+    
+    # Stop silence generation
+    log_message "Stopping silence generator (PID: $silence_pid)..."
+    kill $silence_pid 2>/dev/null || true
+    wait $silence_pid 2>/dev/null || true
+    log_message "Silence generator stopped"
+    
+    return $download_result
 }
 
 stream_track() {
@@ -158,7 +157,7 @@ stream_track() {
         return 1
     fi
 
-    log_message "Streaming: $local_file"
+    log_message "Streaming to rsas: $local_file"
 
     local audio_format
     audio_format=$(ffprobe -v error -select_streams a:0 \
@@ -172,7 +171,7 @@ stream_track() {
         return 1
     fi
     
-    log_message "Format: $audio_format"
+    log_message "Detected format: $audio_format"
 
     local stream_result=0
     case "$audio_format" in
@@ -188,6 +187,7 @@ stream_track() {
             stream_result=$?
             ;;
         *)
+            log_message "Format $audio_format detected"
             ffmpeg -nostdin -hide_banner \
                 -i "$local_file" -map 0:a:0 \
                 -f s16le -ar 48000 -ac 2 - 2>"$INFOFIFO" \
@@ -199,11 +199,11 @@ stream_track() {
     rm -f "$local_file"
 
     if [ $stream_result -ne 0 ]; then
-        log_message "Error: Streaming failed"
+        log_message "Error: Streaming failed for $local_file"
         return 1
     fi
 
-    log_message "Streaming complete"
+    log_message "Finished streaming: $local_file"
     return 0
 }
 
@@ -222,122 +222,31 @@ start_gwsocket() {
     fi
 }
 
-insert_silence() {
-    local duration_sec="${1:-5}"
-    local bytes=$((48000 * 2 * 2 * duration_sec))
-    log_message "Inserting ${duration_sec}s silence"
-    dd if=/dev/zero bs="$bytes" count=1 2>/dev/null > "$PCMFIFO"
-}
-
-check_ffmpeg() {
-    if ! kill -0 "$FFMPEG_PID" 2>/dev/null; then
-        log_message "FFmpeg died, restarting..."
-        start_ffmpeg
-    fi
-}
-
-start_next_download() {
-    local remote_path next_file
-    remote_path=$(get_random_track)
-    next_file=$(get_local_filename "$remote_path")
-    echo "$next_file"
-    download_track_async "$remote_path" "$next_file"
-}
-
-handle_stream_failure() {
-    local next_file="$1"
-    log_message "Streaming failed, checking next track..."
-    if [ ! -f "$next_file" ]; then
-        log_message "Next track not ready, inserting silence..."
-        insert_silence 5
-    fi
-}
-
-handle_missing_next_track() {
-    local remote_path current_file
-    log_message "Next track unavailable, emergency download..."
-    insert_silence 2
-    
-    remote_path=$(get_random_track)
-    current_file=$(get_local_filename "$remote_path")
-    
-    if download_track_sync "$remote_path"; then
-        echo "$current_file"
-        return 0
-    else
-        log_message "Emergency download failed"
-        insert_silence 8
-        return 1
-    fi
-}
-
-prepare_initial_track() {
-    local remote_path current_file
-    remote_path=$(get_random_track)
-    current_file=$(get_local_filename "$remote_path")
-    
-    log_message "Initial download: $remote_path"
-    if download_track_sync "$remote_path"; then
-        if [ -f "$current_file" ]; then
-            echo "$current_file"
-            return 0
-        fi
-        log_message "Error: Download succeeded but file not found: $current_file"
-        return 1
-    fi
-    
-    log_message "Initial download failed, retrying..."
-    insert_silence 5
-    
-    remote_path=$(get_random_track)
-    current_file=$(get_local_filename "$remote_path")
-    if download_track_sync "$remote_path"; then
-        if [ -f "$current_file" ]; then
-            echo "$current_file"
-            return 0
-        fi
-        log_message "Error: Retry download succeeded but file not found: $current_file"
-        return 1
-    fi
-    
-    log_message "Error: Initial download failed twice"
-    return 1
-}
-
 playback_loop() {
-    log_message "Starting playback loop with pre-buffering..."
+    log_message "Starting music playback loop..."
     find "$DOWNLOADS_DIR" -maxdepth 1 -type f -delete 2>/dev/null || true
 
-    local current_file next_file download_pid
-    
-    current_file=$(prepare_initial_track) || exit 1
-
     while true; do
-        # Start pre-buffering next track
-        read -r next_file download_pid <<< "$(start_next_download)"
-        
-        check_ffmpeg
-        
-        # Stream current track
-        if [ -f "$current_file" ]; then
-            if ! stream_track "$current_file"; then
-                wait $download_pid 2>/dev/null
-                handle_stream_failure "$next_file"
-            fi
-        else
-            log_message "Current file missing, skipping..."
-            wait $download_pid 2>/dev/null
+        local remote_path filename local_file
+        remote_path=$(get_random_track)
+        filename=${remote_path##*/}
+        local_file="$DOWNLOADS_DIR/$filename"
+
+        if ! download_track "$remote_path"; then
+            log_message "Download failed, skipping to next track..."
+            sleep 2
+            continue
         fi
 
-        # Wait for pre-buffer to complete
-        wait $download_pid 2>/dev/null
-        
-        # Switch to next track or handle missing track
-        if [ -f "$next_file" ]; then
-            current_file="$next_file"
-            log_message "Switching to: $current_file"
-        else
-            current_file=$(handle_missing_next_track) || continue
+        if ! kill -0 "$FFMPEG_PID" 2>/dev/null; then
+            log_message "FFmpeg died, restarting..."
+            start_ffmpeg
+        fi
+
+        if ! stream_track "$local_file"; then
+            log_message "Streaming failed, skipping to next track..."
+            sleep 2
+            continue
         fi
 
         sleep 1
