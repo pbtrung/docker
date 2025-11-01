@@ -74,7 +74,6 @@ start_rsas() {
 }
 
 start_ffmpeg() {
-    # Close fd 3 if it's open (from previous run)
     exec 3>&- 2>/dev/null || true
     
     rm -f "$PCMFIFO"
@@ -82,7 +81,6 @@ start_ffmpeg() {
 
     log_message "Starting ffmpeg encoder..."
 
-    # Start ffmpeg first (in background)
     ffmpeg -nostdin -hide_banner -loglevel error \
         -f s16le -ar 48000 -ac 2 -i "$PCMFIFO" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0,arealtime" \
@@ -121,14 +119,15 @@ download_track() {
     log_message "Downloading: $remote_path"
     
     (
-        while kill -0 $$ 2>/dev/null; do
-            # Generate 1 second of silence: 48000 Hz * 2 channels * 2 bytes
-            dd if=/dev/zero bs=192000 count=1 2>/dev/null
+        while kill -0 $ 2>/dev/null; do
+            # 48000 Hz * 2 channels * 2 bytes * 5 sec
+            dd if=/dev/zero bs=960000 count=1 2>/dev/null
+            # Sleep slightly less than the audio duration to prevent gaps
+            sleep 4.8
         done
     ) > "$PCMFIFO" &
     local silence_pid=$!
     
-    # Download the track
     local download_result=0
     if ! rclone --config "$RCLONE_CONF" copy "$remote_path" \
         "$DOWNLOADS_DIR/" -v --stats 5s 2>&1 | tee "$INFOFIFO"; then
@@ -136,7 +135,6 @@ download_track() {
         download_result=1
     fi
     
-    # Stop silence generation
     kill $silence_pid 2>/dev/null
     wait $silence_pid 2>/dev/null
     
