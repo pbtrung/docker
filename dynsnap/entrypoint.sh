@@ -142,7 +142,7 @@ download_track() {
     
     # Stop silence generation
     log_message "Stopping silence generator (PID: $silence_pid)..."
-    kill $silence_pid 2>/dev/null || true
+    kill -TERM $silence_pid 2>/dev/null || true
     wait $silence_pid 2>/dev/null || true
     log_message "Silence generator stopped"
     
