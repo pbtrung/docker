@@ -117,15 +117,10 @@ download_track() {
     local remote_path="$1"
     log_message "Downloading: $remote_path"
     
-    # Create stop flag for graceful shutdown
-    local stop_flag="/tmp/stop_silence_$$"
-    log_message "stop_flag: $stop_flag"
-    rm -f "$stop_flag"
-    
     (
         log_message "Starting silence insertion during download..."
         local silence_count=0
-        while [ ! -f "$stop_flag" ] && kill -0 $FFMPEG_PID 2>/dev/null; do
+        while kill -0 $$ 2>/dev/null && kill -0 $FFMPEG_PID 2>/dev/null; do
             # 48000 Hz * 2 channels * 2 bytes * 5 sec = 960000 bytes
             dd if=/dev/zero bs=960000 count=1 2>/dev/null
             silence_count=$((silence_count + 1))
@@ -145,16 +140,11 @@ download_track() {
         download_result=1
     fi
     
-    # Gracefully stop silence generation
-    log_message "Signaling silence generator to stop..."
-    touch "$stop_flag"
-    
-    log_message "Waiting for silence generator to finish cleanly..."
+    # Stop silence generation
+    log_message "Stopping silence generator (PID: $silence_pid)..."
+    kill -TERM $silence_pid 2>/dev/null || true
     wait $silence_pid 2>/dev/null || true
     log_message "Silence generator stopped"
-    
-    # Cleanup
-    rm -f "$stop_flag"
     
     return $download_result
 }
