@@ -278,8 +278,12 @@ prepare_initial_track() {
     
     log_message "Initial download: $remote_path"
     if download_track_sync "$remote_path"; then
-        echo "$current_file"
-        return 0
+        if [ -f "$current_file" ]; then
+            echo "$current_file"
+            return 0
+        fi
+        log_message "Error: Download succeeded but file not found: $current_file"
+        return 1
     fi
     
     log_message "Initial download failed, retrying..."
@@ -288,8 +292,12 @@ prepare_initial_track() {
     remote_path=$(get_random_track)
     current_file=$(get_local_filename "$remote_path")
     if download_track_sync "$remote_path"; then
-        echo "$current_file"
-        return 0
+        if [ -f "$current_file" ]; then
+            echo "$current_file"
+            return 0
+        fi
+        log_message "Error: Retry download succeeded but file not found: $current_file"
+        return 1
     fi
     
     log_message "Error: Initial download failed twice"
