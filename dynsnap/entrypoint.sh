@@ -306,9 +306,7 @@ playback_loop() {
 
     while true; do
         # Start pre-buffering next track
-        download_pid=$(start_next_download)
-        read -r next_file <<< "$(jobs -p $download_pid 2>/dev/null | head -1)"
-        next_file=$(get_local_filename "$(get_random_track)")
+        read -r next_file download_pid <<< "$(start_next_download)"
         
         check_ffmpeg
         
