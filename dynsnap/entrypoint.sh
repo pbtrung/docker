@@ -72,8 +72,7 @@ start_icecast() {
     log_message "Starting icecast with config: $ICECAST_CONF"
     
     if [ ! -f "$ICECAST_CONF" ]; then
-        log_message \
-            "Error: Config file not found: $ICECAST_CONF"
+        log_message "Error: Config file not found: $ICECAST_CONF"
         exit 1
     fi
     
@@ -83,8 +82,7 @@ start_icecast() {
     
     sleep 2
     if ! kill -0 $ICECAST_PID 2>/dev/null; then
-        log_message \
-            "Error: icecast failed to start or crashed immediately"
+        log_message "Error: icecast failed to start or crashed immediately"
         exit 1
     fi
     
@@ -216,8 +214,7 @@ start_gwsocket() {
 
 playback_loop() {
     log_message "Starting music playback loop..."
-    find "$DOWNLOADS_DIR" -maxdepth 1 -type f -delete \
-        2>/dev/null || true
+    find "$DOWNLOADS_DIR" -maxdepth 1 -type f -delete 2>/dev/null || true
     
     while true; do
         local path=$(get_random_track)
@@ -238,8 +235,7 @@ playback_loop() {
         log_message "Selected track: $fname"
         
         if ! download_track "$path"; then
-            log_message \
-                "Download failed, skipping to next track..."
+            log_message "Download failed, skipping to next track..."
             sleep 2
             continue
         fi
@@ -250,8 +246,7 @@ playback_loop() {
         fi
         
         if ! play_track "$fullname"; then
-            log_message \
-                "Playback failed, skipping to next track..."
+            log_message "Playback failed, skipping to next track..."
             sleep 2
             continue
         fi
