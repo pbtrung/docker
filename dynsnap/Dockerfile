@@ -18,7 +18,7 @@ FROM alpine:edge
 RUN apk update && \
     apk --no-cache upgrade && \
     apk --no-cache add wget coreutils sqlite jq rclone \
-        ffmpeg icecast
+        ffmpeg icecast opus-tools mpg123
         
 COPY --from=build /root/gwsocket/gwsocket /usr/bin/
 
