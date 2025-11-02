@@ -17,13 +17,18 @@ log_message() {
 cleanup() {
     log_message "Cleaning up..."
     exec 3>&- 2>/dev/null || true
-    pkill -P $$ ffmpeg 2>/dev/null || true
-    pkill -P $$ icecast 2>/dev/null || true
-    pkill -P $$ gwsocket 2>/dev/null || true
+    
+    # Kill processes using stored PIDs
+    [ -n "$FFMPEG_PID" ] && kill $FFMPEG_PID 2>/dev/null || true
+    [ -n "$ICECAST_PID" ] && kill $ICECAST_PID 2>/dev/null || true
+    [ -n "$GWSOCKET_PID" ] && kill $GWSOCKET_PID 2>/dev/null || true
+    
+    # Fallback to pkill
+    pkill -P $$ 2>/dev/null || true
+    
     rm -f "$INFOFIFO" "$PCMFIFO" 2>/dev/null || true
     exit 0
 }
-
 trap cleanup INT TERM
 
 load_config() {
@@ -49,10 +54,15 @@ load_config() {
 }
 
 download_database() {
-    log_message "Downloading database..."
-    if ! wget -O "$DB_PATH" "$DB_URL" 2>&1 | tee "$INFOFIFO"; then
-        log_message \
-            "Error: Failed to download database from $DB_URL"
+    log_message "Downloading database from $DB_URL..."
+    if [ -n "$INFOFIFO" ] && [ -p "$INFOFIFO" ]; then
+        wget -O "$DB_PATH" "$DB_URL" 2>&1 | tee "$INFOFIFO"
+    else
+        wget -O "$DB_PATH" "$DB_URL" 2>&1
+    fi
+    
+    if [ $? -ne 0 ]; then
+        log_message "Error: Failed to download database from $DB_URL"
         exit 1
     fi
 }
@@ -109,15 +119,13 @@ start_ffmpeg() {
 }
 
 get_random_track() {
-    local total=$(sqlite3 "$DB_PATH" \
-        "SELECT COUNT(*) FROM files;")
+    local total=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM files;")
     if [ "$total" -eq 0 ]; then
         log_message "Error: No tracks in database"
-        exit 1
+        return 1
     fi
     local random_id=$(shuf -i 1-"$total" -n 1)
-    sqlite3 "$DB_PATH" \
-        "SELECT path FROM files WHERE id = $random_id;"
+    sqlite3 "$DB_PATH" "SELECT path FROM files WHERE id = $random_id;"
 }
 
 download_track() {
@@ -212,8 +220,21 @@ playback_loop() {
     
     while true; do
         local path=$(get_random_track)
+        if [ -z "$path" ]; then
+            log_message "Error: Failed to get random track"
+            sleep 5
+            continue
+        fi
+        
         local fname=${path##*/}
+        if [ -z "$fname" ]; then
+            log_message "Error: Failed to extract filename from path"
+            sleep 2
+            continue
+        fi
+        
         local fullname="$DOWNLOADS_DIR/$fname"
+        log_message "Selected track: $fname"
         
         if ! download_track "$path"; then
             log_message \
