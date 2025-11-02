@@ -29,6 +29,7 @@ cleanup() {
     rm -f "$INFOFIFO" "$PCMFIFO" 2>/dev/null || true
     exit 0
 }
+
 trap cleanup INT TERM
 
 load_config() {
