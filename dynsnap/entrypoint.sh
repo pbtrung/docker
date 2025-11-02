@@ -5,6 +5,7 @@ set -eu
 ICECAST_PID=""
 GWSOCKET_PID=""
 INFOFIFO=""
+FFMPEG_PID=""
 
 log_message() {
     echo "$1"
@@ -15,12 +16,11 @@ log_message() {
 
 cleanup() {
     log_message "Cleaning up..."
+    exec 3>&- 2>/dev/null || true
     pkill -P $$ ffmpeg 2>/dev/null || true
     pkill -P $$ icecast 2>/dev/null || true
     pkill -P $$ gwsocket 2>/dev/null || true
-    if [ -n "$INFOFIFO" ] && [ -e "$INFOFIFO" ]; then
-        rm -f "$INFOFIFO" 2>/dev/null || true
-    fi
+    rm -f "$INFOFIFO" "$PCMFIFO" 2>/dev/null || true
     exit 0
 }
 
@@ -34,6 +34,7 @@ load_config() {
     DOWNLOADS_DIR=$(jq -r '.downloads_dir' "$config_file")
     RCLONE_CONF=$(jq -r '.rclone_conf' "$config_file")
     INFOFIFO=$(jq -r '.infofifo' "$config_file")
+    PCMFIFO=$(jq -r '.pcmfifo' "$config_file")
     DB_PATH=$(jq -r '.db_path' "$config_file")
     
     log_message "=== Configuration ==="
@@ -43,22 +44,8 @@ load_config() {
     log_message "RCLONE_CONF: $RCLONE_CONF"
     log_message "DB_PATH: $DB_PATH"
     log_message "INFOFIFO: $INFOFIFO"
+    log_message "PCMFIFO: $PCMFIFO"
     log_message "===================="
-}
-
-start_gwsocket() {
-    log_message "Creating FIFO and starting gwsocket..."
-    rm -f "$INFOFIFO"
-    mkfifo "$INFOFIFO"
-    gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO" &
-    GWSOCKET_PID=$!
-    log_message "gwsocket started with PID: $GWSOCKET_PID"
-    
-    sleep 1
-    if ! kill -0 $GWSOCKET_PID 2>/dev/null; then
-        log_message "Error: gwsocket failed to start"
-        exit 1
-    fi
 }
 
 download_database() {
@@ -93,6 +80,34 @@ start_icecast() {
     log_message "Icecast is running successfully"
 }
 
+start_ffmpeg() {
+    exec 3>&- 2>/dev/null || true
+    
+    rm -f "$PCMFIFO"
+    mkfifo "$PCMFIFO"
+
+    log_message "Starting ffmpeg encoder..."
+
+    ffmpeg -nostdin -hide_banner -loglevel warning -re \
+        -f s16le -ar 48000 -ac 2 -i "$PCMFIFO" \
+        -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
+        -ar 48000 -sample_fmt s16 -ac 2 \
+        -c:a flac -compression_level 6 \
+        -f ogg -content_type application/ogg \
+        icecast://source:hackme@localhost:8000/stream.ogg &
+    FFMPEG_PID=$!
+    log_message "FFmpeg started with PID: $FFMPEG_PID"
+    
+    sleep 1
+    if ! kill -0 $FFMPEG_PID 2>/dev/null; then
+        log_message "Error: ffmpeg failed to start"
+        exit 1
+    fi
+    
+    exec 3>"$PCMFIFO"
+    log_message "FIFO holder established"
+}
+
 get_random_track() {
     local total=$(sqlite3 "$DB_PATH" \
         "SELECT COUNT(*) FROM files;")
@@ -118,38 +133,82 @@ download_track() {
 }
 
 play_track() {
-    local fullname="$1"
+    local local_file="$1"
 
-    if [ ! -f "$fullname" ]; then
-        log_message "Error: File not found: $fullname"
+    if [ ! -f "$local_file" ]; then
+        log_message "Error: File not found: $local_file"
         return 1
     fi
 
-    log_message "Streaming: $fullname"
+    log_message "Streaming: $local_file"
 
-    if ! ffmpeg -nostdin -hide_banner -y -re -i "$fullname" \
-        -map 0:a:0 \
-        -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
-        -ar 48000 -sample_fmt s16 -ac 2 \
-        -c:a flac \
-        -compression_level 6 \
-        -f ogg \
-        -content_type audio/ogg \
-        "icecast://source:hackme@localhost:8000/stream.ogg" \
-        2>"$INFOFIFO"; then
-        log_message "Error: ffmpeg streaming failed"
-        rm -f "$fullname"
+    local audio_format
+    audio_format=$(ffprobe -v error -select_streams a:0 \
+        -show_entries stream=codec_name \
+        -of default=noprint_wrappers=1:nokey=1 \
+        "$local_file" 2>/dev/null)
+    
+    if [ -z "$audio_format" ]; then
+        log_message "Error: Could not determine audio format"
+        rm -f "$local_file"
+        return 1
+    fi
+    
+    log_message "Detected format: $audio_format"
+
+    local stream_result=0
+    case "$audio_format" in
+        opus)
+            opusdec --rate 48000 --force-stereo \
+                "$local_file" - 2>"$INFOFIFO" > "$PCMFIFO"
+            stream_result=$?
+            ;;
+        mp3)
+            mpg123 --rate 48000 --encoding s16 \
+                --stereo --long-tag -v -s "$local_file" \
+                2>"$INFOFIFO" > "$PCMFIFO"
+            stream_result=$?
+            ;;
+        *)
+            log_message "Format $audio_format detected"
+            ffmpeg -nostdin -hide_banner \
+                -i "$local_file" -map 0:a:0 \
+                -f s16le -ar 48000 -ac 2 - 2>"$INFOFIFO" \
+                > "$PCMFIFO"
+            stream_result=$?
+            ;;
+    esac
+
+    rm -f "$local_file"
+
+    if [ $stream_result -ne 0 ]; then
+        log_message "Error: Streaming failed for $local_file"
         return 1
     fi
 
-    rm -f "$fullname"
-    log_message "Finished streaming: $fullname"
+    log_message "Finished streaming: $local_file"
     return 0
+}
+
+start_gwsocket() {
+    log_message "Creating FIFO and starting gwsocket..."
+    rm -f "$INFOFIFO"
+    mkfifo "$INFOFIFO"
+    gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO" &
+    GWSOCKET_PID=$!
+    log_message "gwsocket started with PID: $GWSOCKET_PID"
+    
+    sleep 1
+    if ! kill -0 $GWSOCKET_PID 2>/dev/null; then
+        log_message "Error: gwsocket failed to start"
+        exit 1
+    fi
 }
 
 playback_loop() {
     log_message "Starting music playback loop..."
-    find "$DOWNLOADS_DIR" -maxdepth 1 -type f -delete 2>/dev/null || true
+    find "$DOWNLOADS_DIR" -maxdepth 1 -type f -delete \
+        2>/dev/null || true
     
     while true; do
         local path=$(get_random_track)
@@ -157,13 +216,20 @@ playback_loop() {
         local fullname="$DOWNLOADS_DIR/$fname"
         
         if ! download_track "$path"; then
-            log_message "Download failed, skipping to next track..."
+            log_message \
+                "Download failed, skipping to next track..."
             sleep 2
             continue
         fi
+
+        if ! kill -0 "$FFMPEG_PID" 2>/dev/null; then
+            log_message "FFmpeg died, restarting..."
+            start_ffmpeg
+        fi
         
         if ! play_track "$fullname"; then
-            log_message "Playback failed, skipping to next track..."
+            log_message \
+                "Playback failed, skipping to next track..."
             sleep 2
             continue
         fi
@@ -177,6 +243,7 @@ main() {
     start_gwsocket
     download_database
     start_icecast
+    start_ffmpeg
     playback_loop
 }
 
