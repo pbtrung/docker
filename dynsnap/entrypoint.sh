@@ -104,19 +104,9 @@ play_track() {
     opusinfo "$fullname" 2>&1 > "$INFOFIFO"
     if ! ffmpeg -nostdin -hide_banner -y -i "$fullname" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
-        -f s16le -ar 48000 -ac 2 \
-        "$SNAPFIFO" \
-        2> >(stdbuf -oL -eL tee -a "$INFOFIFO" \
-              | awk -v file="$fullname" -v infofifo="$INFOFIFO" '
-                    /timestamp discontinuity/ {
-                        # Run opusinfo on every match; append stdout+stderr to INFOFIFO
-                        system("opusinfo \"" file "\" >> \"" infofifo "\" 2>&1")
-                    }
-              ')
+        -f s16le -ar 48000 -ac 2 "$SNAPFIFO" 2>"$INFOFIFO"
     then
         log_message "Error: ffmpeg streaming failed"
-        # Wait a moment for awk to finish any pending opusinfo calls
-        sleep 1
         rm -f "$fullname"
         return 1
     fi
