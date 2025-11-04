@@ -15,18 +15,16 @@ RUN git clone https://github.com/allinurl/gwsocket && \
 
 FROM alpine:edge
 
+RUN echo "@testing https://dl-cdn.alpinelinux.org/alpine/edge/testing" >> /etc/apk/repositories
+
 RUN apk update && \
     apk --no-cache upgrade && \
-    apk --no-cache add wget coreutils sqlite jq rclone \
-        ffmpeg icecast opus-tools mpg123
+    apk --no-cache add snapcast-server snapweb@testing \
+        wget coreutils sqlite jq rclone ffmpeg opus-tools
         
 COPY --from=build /root/gwsocket/gwsocket /usr/bin/
 
 WORKDIR /script
 COPY entrypoint.sh /script/
-
-RUN mkdir /music
-RUN chown -R icecast:icecast /music
-USER icecast
 
 ENTRYPOINT ["/script/entrypoint.sh"]
