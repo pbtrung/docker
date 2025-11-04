@@ -93,19 +93,35 @@ download_track() {
 
 play_track() {
     local fullname="$1"
-
+    
     if [ ! -f "$fullname" ]; then
         log_message "Error: File not found: $fullname"
         return 1
     fi
-
+    
     log_message "Streaming: $fullname"
-
-    opusinfo "$fullname" 2>&1 > "$INFOFIFO"
-    if ! ffmpeg -nostdin -hide_banner -y -i "$fullname" \
+    
+    # Launch process substitution, get its PID
+    exec {stderr_fd}> >(stdbuf -oL -eL tee -a "$INFOFIFO" \
+                        | awk -v file="$fullname" -v infofifo="$INFOFIFO" '
+                              /timestamp discontinuity/ {
+                                  system("opusinfo \"" file "\" >> \"" infofifo "\" 2>&1")
+                              }
+                          ')
+    local awk_pid=$!
+    
+    # ffmpeg streams, awk processes stderr IN REALTIME
+    ffmpeg -nostdin -hide_banner -y -i "$fullname" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
-        -f s16le -ar 48000 -ac 2 \
-        "$SNAPFIFO" 2>"$INFOFIFO"; then
+        -f s16le -ar 48000 -ac 2 "$SNAPFIFO" 2>&${stderr_fd}
+    
+    local ffmpeg_exit=$?
+    
+    # Close FD, wait for awk to finish
+    eval "exec ${stderr_fd}>&-"
+    wait "$awk_pid" 2>/dev/null
+    
+    if [ $ffmpeg_exit -ne 0 ]; then
         log_message "Error: ffmpeg streaming failed"
         rm -f "$fullname"
         return 1
