@@ -101,6 +101,7 @@ play_track() {
 
     log_message "Streaming: $fullname"
 
+    opusinfo "$fullname" 2>&1 > "$INFOFIFO"
     if ! ffmpeg -nostdin -hide_banner -y -i "$fullname" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
         -f s16le -ar 48000 -ac 2 \
