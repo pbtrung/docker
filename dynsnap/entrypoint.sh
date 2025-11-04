@@ -69,6 +69,8 @@ start_snapserver() {
         log_message "Try running manually: snapserver --config $SNAPSERVER_CONF"
         exit 1
     fi
+
+    mosquitto -c /music/mosquitto.conf -d
     
     log_message "Snapserver is running successfully"
 }
