@@ -3,12 +3,11 @@
 # Exit on error
 set -eu
 
-SNAPSERVER_PID=""
-GWSOCKET_PID=""
-PIPELINE_PID=""
-
 log_message() {
-    echo "$1" | tee "$INFOFIFO" 2>/dev/null || echo "$1"
+    echo "$1"
+    if [ -n "$INFOFIFO" ] && [ -p "$INFOFIFO" ]; then
+        echo "$1" > "$INFOFIFO" 2>/dev/null || true
+    fi
 }
 
 cleanup() {
@@ -46,7 +45,7 @@ load_config() {
 
 download_database() {
     log_message "Downloading database..."
-    if ! wget -O "$DB_PATH" "$DB_URL" 2>"$INFOFIFO"; then
+    if ! wget -O "$DB_PATH" "$DB_URL" 2>&1 | tee "$INFOFIFO"; then
         log_message "Error: Failed to download database from $DB_URL"
         exit 1
     fi
@@ -61,11 +60,11 @@ start_snapserver() {
     fi
     
     snapserver --config "$SNAPSERVER_CONF" &
-    SNAPSERVER_PID=$!
-    log_message "Snapserver started with PID: $SNAPSERVER_PID"
+    local snapserver_pid=$!
+    log_message "Snapserver started with PID: $snapserver_pid"
     
     sleep 1
-    if ! kill -0 $SNAPSERVER_PID 2>/dev/null; then
+    if ! kill -0 $snapserver_pid 2>/dev/null; then
         log_message "Error: snapserver failed to start or crashed immediately"
         log_message "Try running manually: snapserver --config $SNAPSERVER_CONF"
         exit 1
@@ -84,25 +83,12 @@ download_track() {
     local path="$1"
     
     log_message "Downloading: $path"
-    if ! rclone --config "$RCLONE_CONF" copy "$path" "$DOWNLOADS_DIR/" -v --stats 5s 2>"$INFOFIFO"; then
+    if ! rclone --config "$RCLONE_CONF" copy "$path" \
+        "$DOWNLOADS_DIR/" -v --stats 5s 2>&1 | tee "$INFOFIFO"; then
         log_message "Error: rclone failed to download $path"
-        exit 1
+        return 1
     fi
-}
-
-kill_process() {
-    local pid="$1"
-    if [ -n "$pid" ]; then
-        kill "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
-    fi
-}
-
-kill_pipeline() {
-    if [ -n "$PIPELINE_PID" ]; then
-        pkill -P $PIPELINE_PID 2>/dev/null || true
-    fi
-    PIPELINE_PID=""
+    return 0
 }
 
 play_track() {
@@ -135,8 +121,14 @@ start_gwsocket() {
     rm -f "$INFOFIFO"
     mkfifo "$INFOFIFO"
     gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO" &
-    GWSOCKET_PID=$!
-    log_message "gwsocket started with PID: $GWSOCKET_PID"
+    local gwsocket_pid=$!
+    log_message "gwsocket started with PID: $gwsocket_pid"
+    
+    sleep 1
+    if ! kill -0 $gwsocket_pid 2>/dev/null; then
+        log_message "Error: gwsocket failed to start"
+        exit 1
+    fi
 }
 
 playback_loop() {
@@ -148,7 +140,11 @@ playback_loop() {
         local fname=${path##*/}
         local fullname="$DOWNLOADS_DIR/$fname"
         
-        download_track "$path"
+        if ! download_track "$path"; then
+            log_message "Download failed, skipping to next track..."
+            sleep 1
+            continue
+        fi
         
         if ! play_track "$fullname"; then
             log_message "Skipping to next track..."
@@ -158,8 +154,6 @@ playback_loop() {
         
         sleep 1
     done
-
-    kill_process "$GWSOCKET_PID"
 }
 
 main() {
