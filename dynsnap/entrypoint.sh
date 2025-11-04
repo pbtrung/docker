@@ -101,23 +101,11 @@ play_track() {
 
     log_message "Streaming: $fullname"
 
-    { ffmpeg -nostdin -hide_banner -y -i "$fullname" \
+    opusinfo "$fullname" 2>&1 > "$INFOFIFO"
+    if ! ffmpeg -nostdin -hide_banner -y -i "$fullname" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
         -f s16le -ar 48000 -ac 2 \
-        "$SNAPFIFO" 2>&1; echo $? > /tmp/ffmpeg_status.$$; } | \
-    while IFS= read -r line; do
-        echo "$line" > "$INFOFIFO"
-        
-        if echo "$line" | grep -q "timestamp discontinuity"; then
-            log_message "Timestamp discontinuity detected! Running opusinfo..."
-            opusinfo "$fullname" 2>&1 | tee "$INFOFIFO"
-        fi
-    done
-    
-    local ffmpeg_status=$(cat /tmp/ffmpeg_status.$$)
-    rm -f /tmp/ffmpeg_status.$$
-    
-    if [ $ffmpeg_status -ne 0 ]; then
+        "$SNAPFIFO" 2>"$INFOFIFO"; then
         log_message "Error: ffmpeg streaming failed"
         rm -f "$fullname"
         return 1
