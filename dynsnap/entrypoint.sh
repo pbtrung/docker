@@ -91,6 +91,11 @@ download_track() {
     return 0
 }
 
+mqtt_message() {
+    local msg="$1"
+    mosquitto_pub -h localhost -p 1883 -t music/info -m "$msg" 2>/dev/null || true
+}
+
 play_track() {
     local fullname="$1"
 
@@ -101,7 +106,10 @@ play_track() {
 
     log_message "Streaming: $fullname"
 
-    opusinfo "$fullname" 2>&1 > "$INFOFIFO"
+    opusinfo "$fullname" 2>&1 | while IFS= read -r line; do
+        mqtt_message "$line"
+    done
+    
     if ! ffmpeg -nostdin -hide_banner -y -i "$fullname" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
         -f s16le -ar 48000 -ac 2 "$SNAPFIFO" 2>"$INFOFIFO"
