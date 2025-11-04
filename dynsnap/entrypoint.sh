@@ -93,30 +93,19 @@ download_track() {
 
 play_track() {
     local fullname="$1"
+
     if [ ! -f "$fullname" ]; then
         log_message "Error: File not found: $fullname"
         return 1
     fi
+
     log_message "Streaming: $fullname"
-    
-    { ffmpeg -nostdin -hide_banner -y -i "$fullname" \
+
+    opusinfo "$fullname" 2>&1 > "$INFOFIFO"
+    if ! ffmpeg -nostdin -hide_banner -y -i "$fullname" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
         -f s16le -ar 48000 -ac 2 \
-        "$SNAPFIFO" 2>&1; echo $? > /tmp/ffmpeg_status.$$; } | \
-    grep --line-buffered -E "timestamp discontinuity|size=.*time=.*bitrate=|Error|WARNING" | \
-    while IFS= read -r line; do
-        echo "$line" > "$INFOFIFO"
-        
-        if echo "$line" | grep -q "timestamp discontinuity"; then
-            log_message "Timestamp discontinuity detected! Running opusinfo..."
-            opusinfo "$fullname" 2>&1 > "$INFOFIFO"
-        fi
-    done
-    
-    local ffmpeg_status=$(cat /tmp/ffmpeg_status.$$)
-    rm -f /tmp/ffmpeg_status.$$
-    
-    if [ $ffmpeg_status -ne 0 ]; then
+        "$SNAPFIFO" 2>"$INFOFIFO"; then
         log_message "Error: ffmpeg streaming failed"
         rm -f "$fullname"
         return 1
