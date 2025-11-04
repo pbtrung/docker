@@ -21,7 +21,7 @@ RUN apk update && \
     apk --no-cache upgrade && \
     apk --no-cache add snapcast-server snapweb@testing \
         wget coreutils sqlite jq rclone ffmpeg opus-tools \
-        mosquitto
+        mosquitto mosquitto-clients
         
 COPY --from=build /root/gwsocket/gwsocket /usr/bin/
 
