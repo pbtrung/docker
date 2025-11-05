@@ -13,7 +13,6 @@ log_message() {
 cleanup() {
     log_message "Cleaning up..."
     pkill -P $$ ffmpeg 2>/dev/null || true
-    pkill -P $$ snapserver 2>/dev/null || true
     pkill -P $$ gwsocket 2>/dev/null || true
     pkill -P $$ mosquitto 2>/dev/null || true
     rm -f "$INFOFIFO" 2>/dev/null || true
@@ -26,10 +25,9 @@ load_config() {
     local config_file="/music/config.json"
     
     DB_URL=$(jq -r '.db_url' "$config_file")
-    SNAPSERVER_CONF=$(jq -r '.snapserver_conf' "$config_file")
+    ICECAST_CONF=$(jq -r '.icecast_conf' "$config_file")
     DOWNLOADS_DIR=$(jq -r '.downloads_dir' "$config_file")
     RCLONE_CONF=$(jq -r '.rclone_conf' "$config_file")
-    SNAPFIFO=$(jq -r '.snapfifo' "$config_file")
     INFOFIFO=$(jq -r '.infofifo' "$config_file")
     DB_PATH=$(jq -r '.db_path' "$config_file")
     MOSQUITTO_CONF=$(jq -r '.mosquitto_conf' "$config_file")
@@ -38,10 +36,9 @@ load_config() {
     
     log_message "=== Configuration ==="
     log_message "DB_URL: $DB_URL"
-    log_message "SNAPSERVER_CONF: $SNAPSERVER_CONF"
+    log_message "ICECAST_CONF: $ICECAST_CONF"
     log_message "DOWNLOADS_DIR: $DOWNLOADS_DIR"
     log_message "RCLONE_CONF: $RCLONE_CONF"
-    log_message "SNAPFIFO: $SNAPFIFO"
     log_message "DB_PATH: $DB_PATH"
     log_message "INFOFIFO: $INFOFIFO"
     log_message "MOSQUITTO_CONF: $MOSQUITTO_CONF"
@@ -58,26 +55,25 @@ download_database() {
     fi
 }
 
-start_snapserver() {
-    log_message "Starting snapserver with config: $SNAPSERVER_CONF"
+start_icecast() {
+    log_message "Starting icecast with config: $ICECAST_CONF"
     
-    if [ ! -f "$SNAPSERVER_CONF" ]; then
-        log_message "Error: Config file not found: $SNAPSERVER_CONF"
+    if [ ! -f "$ICECAST_CONF" ]; then
+        log_message "Error: Config file not found: $ICECAST_CONF"
         exit 1
     fi
     
-    snapserver --config "$SNAPSERVER_CONF" &
-    local snapserver_pid=$!
-    log_message "Snapserver started with PID: $snapserver_pid"
+    icecast -c "$ICECAST_CONF" 2>&1 | tee "$INFOFIFO" &
+    local icecast_pid=$!
+    log_message "Icecast started with PID: $icecast_pid"
     
-    sleep 1
-    if ! kill -0 $snapserver_pid 2>/dev/null; then
-        log_message "Error: snapserver failed to start or crashed immediately"
-        log_message "Try running manually: snapserver --config $SNAPSERVER_CONF"
+    sleep 2
+    if ! kill -0 $icecast_pid 2>/dev/null; then
+        log_message "Error: icecast failed to start or crashed immediately"
         exit 1
     fi
     
-    log_message "Snapserver is running successfully"
+    log_message "Icecast is running successfully"
 }
 
 start_mosquitto() {
@@ -137,18 +133,46 @@ play_track() {
 
     log_message "Streaming: $fullname"
 
-    opus_metadata=$(opusinfo "$fullname" 2>&1)
-    mqtt_message "$opus_metadata" "music/info"
+    local audio_format
+    audio_format=$(ffprobe -v error -select_streams a:0 \
+        -show_entries stream=codec_name \
+        -of default=noprint_wrappers=1:nokey=1 \
+        "$fullname" 2>/dev/null)
     
-    if ! ffmpeg -nostdin -hide_banner -y -i "$fullname" \
-        -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
-        -f s16le -ar 48000 -ac 2 "$SNAPFIFO" 2>"$INFOFIFO"
-    then
-        log_message "Error: ffmpeg streaming failed"
+    if [ -z "$audio_format" ]; then
+        log_message "Error: Could not determine audio format"
         rm -f "$fullname"
         return 1
     fi
+    
+    log_message "Detected format: $audio_format"
 
+    opus_metadata=$(opusinfo "$fullname" 2>&1)
+    mqtt_message "$opus_metadata" "music/info"
+    
+    local content_type
+    case "$audio_format" in
+        opus)
+            content_type="application/ogg"
+            ;;
+        mp3)
+            content_type="audio/mpeg"
+            ;;
+        *)
+            log_message "Warning: Unsupported format $audio_format, defaulting to audio/mpeg"
+            content_type="audio/mpeg"
+            ;;
+    esac
+    
+    if ! ffmpeg -nostdin -hide_banner -re -i "$fullname" \
+        -c:a copy -f $audio_format -content_type "$content_type" \
+        "icecast://source:hackme@localhost:8000/stream" 2>"$INFOFIFO"
+    then
+        log_message "Error: ffmpeg streaming to Icecast failed"
+        rm -f "$fullname"
+        return 1
+    fi
+    
     rm -f "$fullname"
     log_message "Finished streaming: $fullname"
     return 0
@@ -198,7 +222,7 @@ main() {
     load_config
     start_gwsocket
     download_database
-    start_snapserver
+    start_icecast
     start_mosquitto
     playback_loop
 }
