@@ -15,6 +15,7 @@ cleanup() {
     pkill -P $$ ffmpeg 2>/dev/null || true
     pkill -P $$ snapserver 2>/dev/null || true
     pkill -P $$ gwsocket 2>/dev/null || true
+    pkill -P $$ mosquitto 2>/dev/null || true
     rm -f "$INFOFIFO" 2>/dev/null || true
     exit 1
 }
@@ -31,6 +32,9 @@ load_config() {
     SNAPFIFO=$(jq -r '.snapfifo' "$config_file")
     INFOFIFO=$(jq -r '.infofifo' "$config_file")
     DB_PATH=$(jq -r '.db_path' "$config_file")
+    MOSQUITTO_CONF=$(jq -r '.mosquitto_conf' "$config_file")
+    MOSQUITTO_HOST=$(jq -r '.mosquitto_host' "$config_file")
+    MOSQUITTO_PORT=$(jq -r '.mosquitto_port' "$config_file")
     
     log_message "=== Configuration ==="
     log_message "DB_URL: $DB_URL"
@@ -40,6 +44,9 @@ load_config() {
     log_message "SNAPFIFO: $SNAPFIFO"
     log_message "DB_PATH: $DB_PATH"
     log_message "INFOFIFO: $INFOFIFO"
+    log_message "MOSQUITTO_CONF: $MOSQUITTO_CONF"
+    log_message "MOSQUITTO_HOST: $MOSQUITTO_HOST"
+    log_message "MOSQUITTO_PORT: $MOSQUITTO_PORT"
     log_message "===================="
 }
 
@@ -69,10 +76,30 @@ start_snapserver() {
         log_message "Try running manually: snapserver --config $SNAPSERVER_CONF"
         exit 1
     fi
-
-    mosquitto -c /music/mosquitto.conf -d
     
     log_message "Snapserver is running successfully"
+}
+
+start_mosquitto() {
+    log_message "Starting mosquitto with config: $MOSQUITTO_CONF"
+    
+    if [ ! -f "$MOSQUITTO_CONF" ]; then
+        log_message "Error: Mosquitto config file not found: $MOSQUITTO_CONF"
+        exit 1
+    fi
+    
+    mosquitto -c "$MOSQUITTO_CONF" -d
+    local mosquitto_pid=$!
+    log_message "Mosquitto started with PID: $mosquitto_pid"
+    
+    sleep 1
+    if ! kill -0 $mosquitto_pid 2>/dev/null; then
+        log_message "Error: mosquitto failed to start or crashed immediately"
+        log_message "Try running manually: mosquitto -c $MOSQUITTO_CONF"
+        exit 1
+    fi
+    
+    log_message "Mosquitto is running successfully"
 }
 
 get_random_track() {
@@ -95,7 +122,9 @@ download_track() {
 
 mqtt_message() {
     local msg="$1"
-    mosquitto_pub -h localhost -p 1883 -t music/info -m "$msg" -r 2>/dev/null || true
+    local topic="$2"
+    mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT \
+        -t "$topic" -m "$msg" -r 2>/dev/null || true
 }
 
 play_track() {
@@ -109,7 +138,7 @@ play_track() {
     log_message "Streaming: $fullname"
 
     opus_metadata=$(opusinfo "$fullname" 2>&1)
-    mqtt_message "$opus_metadata"
+    mqtt_message "$opus_metadata" "music/info"
     
     if ! ffmpeg -nostdin -hide_banner -y -i "$fullname" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
@@ -170,6 +199,7 @@ main() {
     start_gwsocket
     download_database
     start_snapserver
+    start_mosquitto
     playback_loop
 }
 
