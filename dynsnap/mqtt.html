@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MQTT Topic Viewer</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.3.4/mqtt.min.js"></script>
+</head>
+<body>
+    <div class="container mt-5">
+        <div class="row justify-content-center">
+            <div class="col-md-8">
+                <div class="card shadow">
+                    <div class="card-header bg-primary text-white">
+                        <h4 class="mb-0">MQTT Topic Viewer</h4>
+                    </div>
+                    <div class="card-body">
+                        <form id="mqttForm">
+                            <div class="mb-3">
+                                <label for="hostname" class="form-label">Hostname</label>
+                                <input type="text" class="form-control" id="hostname" placeholder="ws://localhost:9001" required>
+                                <small class="form-text text-muted">WebSocket URL (e.g., ws://localhost:9001)</small>
+                            </div>
+                            <div class="mb-3">
+                                <label for="topic" class="form-label">Topic</label>
+                                <input type="text" class="form-control" id="topic" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary" id="connectBtn">Connect</button>
+                            <button type="button" class="btn btn-danger" id="disconnectBtn" style="display:none;">Disconnect</button>
+                            <span class="ms-3" id="status"></span>
+                        </form>
+
+                        <hr>
+
+                        <div class="mb-3">
+                            <label for="messageArea" class="form-label">Messages</label>
+                            <textarea class="form-control font-monospace" id="messageArea" rows="15" readonly></textarea>
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-sm" id="clearBtn">Clear Messages</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let client = null;
+        const form = document.getElementById('mqttForm');
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const status = document.getElementById('status');
+        const messageArea = document.getElementById('messageArea');
+        const clearBtn = document.getElementById('clearBtn');
+        const hostnameInput = document.getElementById('hostname');
+        const topicInput = document.getElementById('topic');
+
+        function updateStatus(message, type = 'info') {
+            const colors = {
+                'info': 'text-info',
+                'success': 'text-success',
+                'error': 'text-danger',
+                'warning': 'text-warning'
+            };
+            status.className = colors[type] || colors['info'];
+            status.textContent = message;
+        }
+
+        function addMessage(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            messageArea.value += `[${timestamp}] ${message}\n`;
+            messageArea.scrollTop = messageArea.scrollHeight;
+        }
+
+        form.addEventListener('submit', (e) => {
+            e.preventDefault();
+            
+            const hostname = hostnameInput.value.trim();
+            const topic = topicInput.value.trim();
+
+            if (!hostname || !topic) {
+                updateStatus('Please fill in all fields', 'error');
+                return;
+            }
+
+            updateStatus('Connecting...', 'warning');
+            
+            try {
+                client = mqtt.connect(hostname);
+
+                client.on('connect', () => {
+                    updateStatus('Connected', 'success');
+                    addMessage(`Connected to ${hostname}`);
+                    
+                    client.subscribe(topic, (err) => {
+                        if (err) {
+                            updateStatus('Subscription failed', 'error');
+                            addMessage(`Failed to subscribe to ${topic}: ${err.message}`);
+                        } else {
+                            updateStatus(`Subscribed to ${topic}`, 'success');
+                            addMessage(`Subscribed to topic: ${topic}`);
+                        }
+                    });
+
+                    connectBtn.style.display = 'none';
+                    disconnectBtn.style.display = 'inline-block';
+                    hostnameInput.disabled = true;
+                    topicInput.disabled = true;
+                });
+
+                client.on('message', (topic, message) => {
+                    addMessage(`${message.toString()}`);
+                });
+
+                client.on('error', (err) => {
+                    updateStatus('Connection error', 'error');
+                    addMessage(`Error: ${err.message}`);
+                });
+
+                client.on('close', () => {
+                    updateStatus('Disconnected', 'warning');
+                    addMessage('Connection closed');
+                    connectBtn.style.display = 'inline-block';
+                    disconnectBtn.style.display = 'none';
+                    hostnameInput.disabled = false;
+                    topicInput.disabled = false;
+                });
+
+            } catch (err) {
+                updateStatus('Connection failed', 'error');
+                addMessage(`Failed to connect: ${err.message}`);
+            }
+        });
+
+        disconnectBtn.addEventListener('click', () => {
+            if (client) {
+                client.end();
+                client = null;
+            }
+        });
+
+        clearBtn.addEventListener('click', () => {
+            messageArea.value = '';
+        });
+    </script>
+</body>
+</html>
