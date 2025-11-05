@@ -14,6 +14,7 @@ cleanup() {
     log_message "Cleaning up..."
     pkill -P $$ ffmpeg 2>/dev/null || true
     pkill -P $$ gwsocket 2>/dev/null || true
+    pkill -P $$ icecast 2>/dev/null || true
     pkill -P $$ mosquitto 2>/dev/null || true
     rm -f "$INFOFIFO" 2>/dev/null || true
     exit 1
