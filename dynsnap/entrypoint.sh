@@ -142,7 +142,9 @@ play_track() {
     
     if ! ffmpeg -nostdin -hide_banner -y -i "$fullname" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
-        -f s16le -ar 48000 -ac 2 "$SNAPFIFO" 2>"$INFOFIFO"
+        -c:a flac -ar 48000 -ac 2 \
+        -f rtsp -rtsp_transport http \
+        rtsp://localhost:8888/music 2>"$INFOFIFO"
     then
         log_message "Error: ffmpeg streaming failed"
         rm -f "$fullname"
