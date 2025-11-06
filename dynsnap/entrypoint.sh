@@ -160,12 +160,17 @@ play_track() {
             ;;
     esac
     
-    if ! ffmpeg -nostdin -hide_banner -re -i "$fullname" \
+    ffmpeg -nostdin -hide_banner -re -i "$fullname" \
         -c:a copy -f $audio_format -content_type "$content_type" \
-        "icecast://source:hackme@localhost:8000/stream" 2>&1 \
-        > mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT \
-        -t "music/log" -l
-    then
+        "icecast://source:hackme@localhost:8000/stream" 2>&1 | \
+        mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT \
+        -t "music/log" -l &
+    local ffmpeg_pid=$!
+    
+    wait $ffmpeg_pid
+    local ffmpeg_status=$?
+    
+    if [ $ffmpeg_status -ne 0 ]; then
         log_message "Error: Streaming to Icecast failed"
         rm -f "$fullname"
         return 1
