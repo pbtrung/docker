@@ -139,6 +139,9 @@ play_track() {
     
     gst-launch-1.0 -t \
         filesrc location="$fullname" \
+        ! oggdemux \
+        ! queue \
+        ! oggmux \
         ! queue \
         ! shout2send \
             ip=localhost port=8000 \
