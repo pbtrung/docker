@@ -4,19 +4,17 @@
 set -eu
 
 log_message() {
-    echo "$1"
-    if [ -n "$INFOFIFO" ] && [ -p "$INFOFIFO" ]; then
-        echo "$1" > "$INFOFIFO" 2>/dev/null || true
-    fi
+    local msg="$1"
+    echo "$msg"
+    mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT \
+        -t "music/log" -m "$msg" 2>/dev/null || true
 }
 
 cleanup() {
     log_message "Cleaning up..."
     pkill -P $$ ffmpeg 2>/dev/null || true
-    pkill -P $$ gwsocket 2>/dev/null || true
     pkill -P $$ icecast 2>/dev/null || true
     pkill -P $$ mosquitto 2>/dev/null || true
-    rm -f "$INFOFIFO" 2>/dev/null || true
     exit 1
 }
 
@@ -29,7 +27,6 @@ load_config() {
     ICECAST_CONF=$(jq -r '.icecast_conf' "$config_file")
     DOWNLOADS_DIR=$(jq -r '.downloads_dir' "$config_file")
     RCLONE_CONF=$(jq -r '.rclone_conf' "$config_file")
-    INFOFIFO=$(jq -r '.infofifo' "$config_file")
     DB_PATH=$(jq -r '.db_path' "$config_file")
     MOSQUITTO_CONF=$(jq -r '.mosquitto_conf' "$config_file")
     MOSQUITTO_HOST=$(jq -r '.mosquitto_host' "$config_file")
@@ -41,7 +38,6 @@ load_config() {
     log_message "DOWNLOADS_DIR: $DOWNLOADS_DIR"
     log_message "RCLONE_CONF: $RCLONE_CONF"
     log_message "DB_PATH: $DB_PATH"
-    log_message "INFOFIFO: $INFOFIFO"
     log_message "MOSQUITTO_CONF: $MOSQUITTO_CONF"
     log_message "MOSQUITTO_HOST: $MOSQUITTO_HOST"
     log_message "MOSQUITTO_PORT: $MOSQUITTO_PORT"
@@ -50,7 +46,7 @@ load_config() {
 
 download_database() {
     log_message "Downloading database..."
-    if ! wget -O "$DB_PATH" "$DB_URL" 2>&1 | tee "$INFOFIFO"; then
+    if ! wget -O "$DB_PATH" "$DB_URL" 2>&1; then
         log_message "Error: Failed to download database from $DB_URL"
         exit 1
     fi
@@ -64,7 +60,7 @@ start_icecast() {
         exit 1
     fi
     
-    icecast -c "$ICECAST_CONF" 2>&1 | tee "$INFOFIFO" &
+    icecast -c "$ICECAST_CONF" 2>&1 &
     local icecast_pid=$!
     log_message "Icecast started with PID: $icecast_pid"
     
@@ -89,10 +85,9 @@ start_mosquitto() {
     local mosquitto_pid=$!
     log_message "Mosquitto started with PID: $mosquitto_pid"
     
-    sleep 1
+    sleep 2
     if ! kill -0 $mosquitto_pid 2>/dev/null; then
         log_message "Error: mosquitto failed to start or crashed immediately"
-        log_message "Try running manually: mosquitto -c $MOSQUITTO_CONF"
         exit 1
     fi
     
@@ -110,7 +105,7 @@ download_track() {
     
     log_message "Downloading: $path"
     if ! rclone --config "$RCLONE_CONF" copy "$path" \
-        "$DOWNLOADS_DIR/" -v --stats 5s 2>&1 | tee "$INFOFIFO"; then
+        "$DOWNLOADS_DIR/" -v --stats 5s 2>&1; then
         log_message "Error: rclone failed to download $path"
         return 1
     fi
@@ -160,14 +155,14 @@ play_track() {
             content_type="audio/mpeg"
             ;;
         *)
-            log_message "Error: Unsupported format $audio_format"
-            return 1
+            log_message "Warning: Unsupported format $audio_format, defaulting to audio/mpeg"
+            content_type="audio/mpeg"
             ;;
     esac
     
     if ! ffmpeg -nostdin -hide_banner -re -i "$fullname" \
         -c:a copy -f $audio_format -content_type "$content_type" \
-        "icecast://source:hackme@localhost:8000/stream" 2>"$INFOFIFO"
+        "icecast://source:hackme@localhost:8000/stream" 2>&1
     then
         log_message "Error: Streaming to Icecast failed"
         rm -f "$fullname"
@@ -177,21 +172,6 @@ play_track() {
     rm -f "$fullname"
     log_message "Finished streaming: $fullname"
     return 0
-}
-
-start_gwsocket() {
-    log_message "Creating FIFO and starting gwsocket..."
-    rm -f "$INFOFIFO"
-    mkfifo "$INFOFIFO"
-    gwsocket --port=9000 --addr=0.0.0.0 --std < "$INFOFIFO" &
-    local gwsocket_pid=$!
-    log_message "gwsocket started with PID: $gwsocket_pid"
-    
-    sleep 1
-    if ! kill -0 $gwsocket_pid 2>/dev/null; then
-        log_message "Error: gwsocket failed to start"
-        exit 1
-    fi
 }
 
 playback_loop() {
@@ -221,10 +201,9 @@ playback_loop() {
 
 main() {
     load_config
-    start_gwsocket
+    start_mosquitto
     download_database
     start_icecast
-    start_mosquitto
     playback_loop
 }
 
