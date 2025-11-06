@@ -162,7 +162,9 @@ play_track() {
     
     if ! ffmpeg -nostdin -hide_banner -re -i "$fullname" \
         -c:a copy -f $audio_format -content_type "$content_type" \
-        "icecast://source:hackme@localhost:8000/stream" 2>&1
+        "icecast://source:hackme@localhost:8000/stream" 2>&1 \
+        > mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT \
+        -t "music/log" -l
     then
         log_message "Error: Streaming to Icecast failed"
         rm -f "$fullname"
