@@ -134,22 +134,41 @@ play_track() {
 
     log_message "Streaming: $fullname"
 
+    local audio_format
+    audio_format=$(ffprobe -v error -select_streams a:0 \
+        -show_entries stream=codec_name \
+        -of default=noprint_wrappers=1:nokey=1 \
+        "$fullname" 2>/dev/null)
+    
+    if [ -z "$audio_format" ]; then
+        log_message "Error: Could not determine audio format"
+        rm -f "$fullname"
+        return 1
+    fi
+    
+    log_message "Detected format: $audio_format"
+
     opus_metadata=$(opusinfo "$fullname" 2>&1)
     mqtt_message "$opus_metadata" "music/info"
     
-    gst-launch-1.0 -t \
-        filesrc location="$fullname" \
-        ! oggdemux \
-        ! queue \
-        ! oggmux \
-        ! queue \
-        ! shout2send \
-            ip=localhost port=8000 \
-            username=source password=hackme \
-            mount=/stream \
-        2>&1 | tee "$INFOFIFO"
-
-    if [ $? -ne 0 ]; then
+    local content_type
+    case "$audio_format" in
+        opus)
+            content_type="application/ogg"
+            ;;
+        mp3)
+            content_type="audio/mpeg"
+            ;;
+        *)
+            log_message "Error: Unsupported format $audio_format"
+            return 1
+            ;;
+    esac
+    
+    if ! ffmpeg -nostdin -hide_banner -re -i "$fullname" \
+        -c:a copy -f $audio_format -content_type "$content_type" \
+        "icecast://source:hackme@localhost:8000/stream" 2>"$INFOFIFO"
+    then
         log_message "Error: Streaming to Icecast failed"
         rm -f "$fullname"
         return 1
