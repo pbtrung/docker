@@ -19,6 +19,7 @@ RUN apk update && \
     apk --no-cache upgrade && \
     apk --no-cache add wget coreutils sqlite jq rclone \
         ffmpeg opus-tools icecast \
+        gstreamer-tools gst-plugins-base gst-plugins-good \
         mosquitto mosquitto-clients
         
 COPY --from=build /root/gwsocket/gwsocket /usr/bin/
