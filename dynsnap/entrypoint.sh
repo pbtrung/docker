@@ -138,14 +138,15 @@ play_track() {
     mqtt_message "$opus_metadata" "music/info"
     
     gst-launch-1.0 -t \
-        filesrc location="$fullname" do-timestamp=true \
-        ! parsebin \
-        ! identity sync=true \
+        filesrc location="$fullname" \
+        ! oggdemux \
+        ! opusparse \
+        ! oggmux \
         ! shout2send \
             ip=localhost port=8000 \
             username=source password=hackme \
             mount=/stream \
-        2>&1 >"$INFOFIFO"
+        2>&1 | tee "$INFOFIFO"
 
     if [ $? -ne 0 ]; then
         log_message "Error: Streaming to Icecast failed"
