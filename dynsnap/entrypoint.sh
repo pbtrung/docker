@@ -81,7 +81,7 @@ start_mosquitto() {
         exit 1
     fi
     
-    mosquitto -c "$MOSQUITTO_CONF" -d
+    mosquitto -c "$MOSQUITTO_CONF" 2>&1 &
     local mosquitto_pid=$!
     log_message "Mosquitto started with PID: $mosquitto_pid"
     
