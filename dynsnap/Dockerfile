@@ -3,7 +3,7 @@ FROM alpine:edge
 RUN apk update && \
     apk --no-cache upgrade && \
     apk --no-cache add wget coreutils sqlite jq rclone \
-        ffmpeg opus-tools icecast \
+        ffmpeg opus-tools icecast mailcap \
         mosquitto mosquitto-clients
 
 RUN dd if=/dev/zero bs=960000 count=1 \
