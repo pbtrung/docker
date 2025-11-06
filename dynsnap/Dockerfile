@@ -3,15 +3,15 @@ FROM alpine:edge
 RUN apk update && \
     apk --no-cache upgrade && \
     apk --no-cache add wget coreutils sqlite jq rclone \
-        ffmpeg opus-tools lame icecast \
+        ffmpeg opus-tools icecast \
         mosquitto mosquitto-clients
 
-RUN dd if=/dev/zero bs=2205000 count=1 \
-        | lame -r -b 128 -m s \
-          --ta "silence" \
-          --tt "silence" \
-        - silence.mp3 && \
-    mv silence.mp3 /usr/share/icecast/web/
+RUN dd if=/dev/zero bs=960000 count=1 \
+        | opusenc --bitrate 256 --raw \
+        --artist "silence" \
+        --title "silence" \
+        - silence.opus && \
+    mv silence.opus /usr/share/icecast/web/
 
 WORKDIR /script
 COPY entrypoint.sh /script/
