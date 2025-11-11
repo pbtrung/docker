@@ -5,7 +5,8 @@ ARG RSAS_URL=https://www.rocketbroadcaster.com/streaming-audio-server/downloads/
 
 RUN pacman --noconfirm -Syu && \
     pacman --noconfirm -S wget sqlite jq rclone \
-        ffmpeg opus-tools mosquitto
+        ffmpeg opus-tools mosquitto && \
+    pacman --noconfirm -Scc
 
 RUN wget ${RSAS_URL} && \
     tar -xzf rsas-${RSAS_VERSION}-linux_amd64.tar.gz && \
