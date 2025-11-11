@@ -1,4 +1,4 @@
-#!/bin/ash
+#!/bin/bash
 
 # Exit on error
 set -eu
@@ -60,7 +60,7 @@ start_icecast() {
         exit 1
     fi
     
-    icecast -c "$ICECAST_CONF" 2>&1 &
+    rsas -c "$ICECAST_CONF" 2>&1 &
     local icecast_pid=$!
     log_message "Icecast started with PID: $icecast_pid"
     
