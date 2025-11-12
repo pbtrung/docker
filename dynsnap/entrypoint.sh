@@ -145,11 +145,6 @@ play_track() {
 
     opus_metadata=$(opusinfo "$fullname" 2>&1)
     mqtt_message "$opus_metadata" "music/info"
-
-    curl -u source:hackme http://localhost:8000/admin/metadata -X GET -G \
-        --data-urlencode mount=/stream \
-        --data-urlencode mode=updinfo \
-        --data-urlencode song="$(printf '%s' "$song")"
     
     local content_type
     case "$audio_format" in
@@ -173,6 +168,12 @@ play_track() {
         "icecast://source:hackme@localhost:8000/stream" 2>&1 | \
         mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT -t "music/log" -l &
     local pipeline_pid=$!
+
+    sleep 2
+    curl -u source:hackme http://localhost:8000/admin/metadata -X GET -G \
+        --data-urlencode mount=/stream \
+        --data-urlencode mode=updinfo \
+        --data-urlencode song="$(printf '%s' "$opus_metadata")"
     
     wait $pipeline_pid
     local ffmpeg_status=$?
