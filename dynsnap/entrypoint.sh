@@ -163,7 +163,7 @@ play_track() {
     set -o pipefail
 
     ffmpeg -nostdin -hide_banner -progress pipe:1 -stats_period 2 \
-        -readrate 1.10 -readrate_initial_burst 10 -i "$fullname" \
+        -readrate 1.10 -readrate_initial_burst 30 -i "$fullname" \
         -c:a copy -f $audio_format -content_type "$content_type" \
         "icecast://source:hackme@localhost:8000/stream" 2>&1 | \
         mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT -t "music/log" -l &
