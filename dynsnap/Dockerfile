@@ -3,7 +3,9 @@ FROM archlinux:latest
 ARG RSAS_VERSION=1.0.7
 ARG RSAS_URL=https://www.rocketbroadcaster.com/streaming-audio-server/downloads/ubuntu-14.04/rsas-${RSAS_VERSION}-linux_amd64.tar.gz
 
-RUN pacman --noconfirm -Syu && \
+RUN pacman-key --init && \
+    pacman-key --populate archlinux && \
+    pacman --noconfirm -Syu && \
     pacman --noconfirm -S wget sqlite jq rclone \
         ffmpeg opus-tools mosquitto && \
     pacman --noconfirm -Scc
