@@ -164,10 +164,10 @@ play_track() {
 
     ffmpeg -nostdin -hide_banner -progress pipe:1 -stats_period 2 \
         -readrate 1.03 -readrate_initial_burst 10 -i "$fullname" \
-        -c:a copy -f $audio_format -content_type "$content_type" \
+        -c:a copy -f $audio_format \
+        -content_type "$content_type" -ice_description "$opus_metadata" \
         "icecast://source:hackme@localhost:8000/stream" 2>&1 | \
-        mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT \
-        -t "music/log" -l &
+        mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT -t "music/log" -l &
     local pipeline_pid=$!
     
     wait $pipeline_pid
