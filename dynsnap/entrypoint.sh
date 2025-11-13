@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/ash
 
 # Exit on error
 set -eu
@@ -13,7 +13,7 @@ log_message() {
 cleanup() {
     log_message "Cleaning up..."
     pkill -P $$ ffmpeg 2>/dev/null || true
-    pkill -P $$ icecast 2>/dev/null || true
+    pkill -P $$ snapserver 2>/dev/null || true
     pkill -P $$ mosquitto 2>/dev/null || true
     exit 1
 }
@@ -24,20 +24,22 @@ load_config() {
     local config_file="/music/config.json"
     
     DB_URL=$(jq -r '.db_url' "$config_file")
-    ICECAST_CONF=$(jq -r '.icecast_conf' "$config_file")
+    SNAPSERVER_CONF=$(jq -r '.snapserver_conf' "$config_file")
     DOWNLOADS_DIR=$(jq -r '.downloads_dir' "$config_file")
     RCLONE_CONF=$(jq -r '.rclone_conf' "$config_file")
     DB_PATH=$(jq -r '.db_path' "$config_file")
+    SNAPFIFO=$(jq -r '.snapfifo' "$config_file")
     MOSQUITTO_CONF=$(jq -r '.mosquitto_conf' "$config_file")
     MOSQUITTO_HOST=$(jq -r '.mosquitto_host' "$config_file")
     MOSQUITTO_PORT=$(jq -r '.mosquitto_port' "$config_file")
     
     log_message "=== Configuration ==="
     log_message "DB_URL: $DB_URL"
-    log_message "ICECAST_CONF: $ICECAST_CONF"
+    log_message "SNAPSERVER_CONF: $SNAPSERVER_CONF"
     log_message "DOWNLOADS_DIR: $DOWNLOADS_DIR"
     log_message "RCLONE_CONF: $RCLONE_CONF"
     log_message "DB_PATH: $DB_PATH"
+    log_message "SNAPFIFO: $SNAPFIFO"
     log_message "MOSQUITTO_CONF: $MOSQUITTO_CONF"
     log_message "MOSQUITTO_HOST: $MOSQUITTO_HOST"
     log_message "MOSQUITTO_PORT: $MOSQUITTO_PORT"
@@ -52,25 +54,25 @@ download_database() {
     fi
 }
 
-start_icecast() {
-    log_message "Starting icecast with config: $ICECAST_CONF"
+start_snapserver() {
+    log_message "Starting snapserver with config: $SNAPSERVER_CONF"
     
-    if [ ! -f "$ICECAST_CONF" ]; then
-        log_message "Error: Config file not found: $ICECAST_CONF"
+    if [ ! -f "$SNAPSERVER_CONF" ]; then
+        log_message "Error: Config file not found: $SNAPSERVER_CONF"
         exit 1
     fi
     
-    rsas -c "$ICECAST_CONF" 2>&1 &
-    local icecast_pid=$!
-    log_message "Icecast started with PID: $icecast_pid"
+    snapserver --config "$SNAPSERVER_CONF" &
+    local snapserver_pid=$!
+    log_message "Snapserver started with PID: $snapserver_pid"
     
-    sleep 2
-    if ! kill -0 $icecast_pid 2>/dev/null; then
-        log_message "Error: icecast failed to start or crashed immediately"
+    sleep 1
+    if ! kill -0 $snapserver_pid 2>/dev/null; then
+        log_message "Error: snapserver failed to start or crashed immediately"
         exit 1
     fi
     
-    log_message "Icecast is running successfully"
+    log_message "Snapserver is running successfully"
 }
 
 start_mosquitto() {
@@ -129,43 +131,13 @@ play_track() {
 
     log_message "Streaming: $fullname"
 
-    local audio_format
-    audio_format=$(ffprobe -v error -select_streams a:0 \
-        -show_entries stream=codec_name \
-        -of default=noprint_wrappers=1:nokey=1 \
-        "$fullname" 2>/dev/null)
-    
-    if [ -z "$audio_format" ]; then
-        log_message "Error: Could not determine audio format"
-        rm -f "$fullname"
-        return 1
-    fi
-    
-    log_message "Detected format: $audio_format"
-
     opus_metadata=$(opusinfo "$fullname" 2>&1)
     mqtt_message "$opus_metadata" "music/info"
-    
-    local content_type
-    case "$audio_format" in
-        opus)
-            content_type="application/ogg"
-            ;;
-        mp3)
-            content_type="audio/mpeg"
-            ;;
-        *)
-            log_message "Warning: Unsupported format $audio_format, defaulting to audio/mpeg"
-            content_type="audio/mpeg"
-            ;;
-    esac
-    
-    set -o pipefail
 
+    set -o pipefail
     ffmpeg -nostdin -hide_banner -progress pipe:1 -stats_period 2 \
-        -readrate 1.05 -readrate_initial_burst 30 -i "$fullname" \
-        -c:a copy -f $audio_format -content_type "$content_type" \
-        "icecast://source:hackme@localhost:8000/stream" 2>&1 | \
+        -i "$fullname" -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
+        -f s16le -ar 48000 -ac 2 "$SNAPFIFO" 2>&1 | \
         mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT -t "music/log" -l &
     local pipeline_pid=$!
     
@@ -173,7 +145,7 @@ play_track() {
     local ffmpeg_status=$?
     
     if [ $ffmpeg_status -ne 0 ]; then
-        log_message "Error: Streaming to Icecast failed (exit code: $ffmpeg_status)"
+        log_message "Error: Streaming failed (exit code: $ffmpeg_status)"
         rm -f "$fullname"
         return 1
     fi
@@ -212,7 +184,7 @@ main() {
     load_config
     start_mosquitto
     download_database
-    start_icecast
+    start_snapserver
     playback_loop
 }
 
