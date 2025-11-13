@@ -193,8 +193,8 @@ play_track() {
     opus_metadata=$(opusinfo "$fullname" 2>&1)
     mqtt_message "$opus_metadata" "music/info"
 
-    ffmpeg -nostdin -hide_banner -progress pipe:1 -stats_period 2 \
-        -i "$fullname" -map 0:a:0 \
+    ffmpeg -nostdin -hide_banner -progress pipe:1 \
+        -stats_period 2 -y -i "$fullname" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
         -f s16le -ar 48000 -ac 2 "$SNAPFIFO" 2>&1 | \
         mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT -t "music/log" -l &
