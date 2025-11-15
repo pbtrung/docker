@@ -39,7 +39,7 @@ load_config() {
     local config_file="/music/config.json"
     
     DB_URL=$(jq -r '.db_url' "$config_file")
-    ICECAST_CONF=$(jq -r '.icecast_conf' "$config_file")
+    RSAS_CONF=$(jq -r '.rsas_conf' "$config_file")
     DOWNLOADS_DIR=$(jq -r '.downloads_dir' "$config_file")
     RCLONE_CONF=$(jq -r '.rclone_conf' "$config_file")
     DB_PATH=$(jq -r '.db_path' "$config_file")
@@ -49,7 +49,7 @@ load_config() {
     
     log_message "=== Configuration ==="
     log_message "DB_URL: $DB_URL"
-    log_message "ICECAST_CONF: $ICECAST_CONF"
+    log_message "RSAS_CONF: $RSAS_CONF"
     log_message "DOWNLOADS_DIR: $DOWNLOADS_DIR"
     log_message "RCLONE_CONF: $RCLONE_CONF"
     log_message "DB_PATH: $DB_PATH"
@@ -68,14 +68,14 @@ download_database() {
 }
 
 start_rsas() {
-    log_message "Starting RSAS with config: $ICECAST_CONF"
+    log_message "Starting RSAS with config: $RSAS_CONF"
     
-    if [ ! -f "$ICECAST_CONF" ]; then
-        log_message "Error: Config file not found: $ICECAST_CONF"
+    if [ ! -f "$RSAS_CONF" ]; then
+        log_message "Error: Config file not found: $RSAS_CONF"
         exit 1
     fi
     
-    rsas -c "$ICECAST_CONF" 2>&1 &
+    rsas -c "$RSAS_CONF" 2>&1 &
     RSAS_PID=$!
     log_message "RSAS started with PID: $RSAS_PID"
     
