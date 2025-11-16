@@ -11,6 +11,12 @@ MOSQUITTO_PID=""
 CONSECUTIVE_FAILURES=0
 MAX_CONSECUTIVE_FAILURES=5
 
+# Queue management
+QUEUE_DIR=""
+CURRENT_TRACK=""
+NEXT_TRACK=""
+DOWNLOAD_PID=""
+
 log_message() {
     local msg="$1"
     echo "$msg"
@@ -21,6 +27,10 @@ log_message() {
 cleanup() {
     log_message "Cleaning up..."
     pkill -P $$ ffmpeg 2>/dev/null || true
+    
+    if [ -n "$DOWNLOAD_PID" ] && kill -0 $DOWNLOAD_PID 2>/dev/null; then
+        kill $DOWNLOAD_PID 2>/dev/null || true
+    fi
     
     if [ -n "$RSAS_PID" ] && kill -0 $RSAS_PID 2>/dev/null; then
         kill $RSAS_PID 2>/dev/null || true
@@ -47,10 +57,15 @@ load_config() {
     MOSQUITTO_HOST=$(jq -r '.mosquitto_host' "$config_file")
     MOSQUITTO_PORT=$(jq -r '.mosquitto_port' "$config_file")
     
+    # Set up queue directory
+    QUEUE_DIR="$DOWNLOADS_DIR/queue"
+    mkdir -p "$QUEUE_DIR"
+    
     log_message "=== Configuration ==="
     log_message "DB_URL: $DB_URL"
     log_message "RSAS_CONF: $RSAS_CONF"
     log_message "DOWNLOADS_DIR: $DOWNLOADS_DIR"
+    log_message "QUEUE_DIR: $QUEUE_DIR"
     log_message "RCLONE_CONF: $RCLONE_CONF"
     log_message "DB_PATH: $DB_PATH"
     log_message "MOSQUITTO_CONF: $MOSQUITTO_CONF"
@@ -158,12 +173,38 @@ get_random_track() {
 
 download_track() {
     local path="$1"
+    local dest_file="$2"
     
     log_message "Downloading: $path"
     if ! rclone --config "$RCLONE_CONF" copy "$path" \
-        "$DOWNLOADS_DIR/" -v --stats 5s 2>&1; then
+        "$QUEUE_DIR/" -v --stats 5s 2>&1; then
         log_message "Error: rclone failed to download $path"
         return 1
+    fi
+    
+    # Move to destination with specific name
+    local fname=${path##*/}
+    mv "$QUEUE_DIR/$fname" "$dest_file" 2>/dev/null || true
+    return 0
+}
+
+download_track_async() {
+    local path="$1"
+    local dest_file="$2"
+    
+    (
+        download_track "$path" "$dest_file"
+    ) &
+    DOWNLOAD_PID=$!
+}
+
+wait_for_download() {
+    if [ -n "$DOWNLOAD_PID" ] && kill -0 $DOWNLOAD_PID 2>/dev/null; then
+        log_message "Waiting for download to complete (PID: $DOWNLOAD_PID)..."
+        wait $DOWNLOAD_PID
+        local status=$?
+        DOWNLOAD_PID=""
+        return $status
     fi
     return 0
 }
@@ -240,8 +281,27 @@ play_track() {
 }
 
 playback_loop() {
-    log_message "Starting music playback loop..."
+    log_message "Starting music playback loop with queue system..."
     find "$DOWNLOADS_DIR" -maxdepth 1 -type f -delete 2>/dev/null
+    find "$QUEUE_DIR" -maxdepth 1 -type f -delete 2>/dev/null
+    
+    # Download first track to initialize
+    log_message "Initializing queue with first track..."
+    
+    local path=$(get_random_track)
+    if [ -z "$path" ]; then
+        log_message "Failed to get first track"
+        exit 1
+    fi
+    
+    CURRENT_TRACK="$QUEUE_DIR/current.audio"
+    if ! download_track "$path" "$CURRENT_TRACK"; then
+        log_message "Failed to download first track"
+        exit 1
+    fi
+    
+    NEXT_TRACK="$QUEUE_DIR/next.audio"
+    log_message "Queue initialized"
     
     while true; do
         # Health check for background services
@@ -253,33 +313,63 @@ playback_loop() {
             exit 1
         fi
         
-        local path=$(get_random_track)
-        if [ -z "$path" ]; then
-            log_message "Failed to get random track, retrying..."
+        # Start downloading next track in background
+        local next_path=$(get_random_track)
+        if [ -z "$next_path" ]; then
+            log_message "Failed to get next track for queue"
             CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
             sleep 2
             continue
         fi
         
-        local fname=${path##*/}
-        local fullname="$DOWNLOADS_DIR/$fname"
+        download_track_async "$next_path" "$NEXT_TRACK"
         
-        if ! download_track "$path"; then
-            log_message "Download failed, skipping to next track..."
-            CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
-            sleep 2
-            continue
-        fi
-        
-        if ! play_track "$fullname"; then
+        # Play current track (this blocks until track finishes)
+        if ! play_track "$CURRENT_TRACK"; then
             log_message "Playback failed, skipping to next track..."
             CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
+            
+            # Wait for download to complete before continuing
+            wait_for_download
+            
+            # Move next to current if it exists
+            if [ -f "$NEXT_TRACK" ]; then
+                mv "$NEXT_TRACK" "$CURRENT_TRACK"
+            else
+                # If next doesn't exist, download synchronously
+                next_path=$(get_random_track)
+                if [ -n "$next_path" ]; then
+                    download_track "$next_path" "$CURRENT_TRACK" || true
+                fi
+            fi
+            
             sleep 2
             continue
         fi
         
         # Reset failure counter on success
         CONSECUTIVE_FAILURES=0
+        
+        # Wait for background download to complete
+        if ! wait_for_download; then
+            log_message "Background download failed, fetching new track synchronously..."
+            next_path=$(get_random_track)
+            if [ -n "$next_path" ]; then
+                download_track "$next_path" "$NEXT_TRACK" || true
+            fi
+        fi
+        
+        # Move next track to current for the next iteration
+        if [ -f "$NEXT_TRACK" ]; then
+            mv "$NEXT_TRACK" "$CURRENT_TRACK"
+        else
+            log_message "Warning: Next track not available, downloading now..."
+            next_path=$(get_random_track)
+            if [ -n "$next_path" ]; then
+                download_track "$next_path" "$CURRENT_TRACK" || true
+            fi
+        fi
+        
         sleep 1
     done
 }
