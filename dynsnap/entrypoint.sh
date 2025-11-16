@@ -4,7 +4,7 @@
 set -eu
 
 # Global PID tracking
-RSAS_PID=""
+ICECAST_PID=""
 MOSQUITTO_PID=""
 
 # Failure tracking
@@ -32,8 +32,8 @@ cleanup() {
         kill $DOWNLOAD_PID 2>/dev/null || true
     fi
     
-    if [ -n "$RSAS_PID" ] && kill -0 $RSAS_PID 2>/dev/null; then
-        kill $RSAS_PID 2>/dev/null || true
+    if [ -n "$ICECAST_PID" ] && kill -0 $ICECAST_PID 2>/dev/null; then
+        kill $ICECAST_PID 2>/dev/null || true
     fi
     
     if [ -n "$MOSQUITTO_PID" ] && kill -0 $MOSQUITTO_PID 2>/dev/null; then
@@ -49,7 +49,7 @@ load_config() {
     local config_file="/music/config.json"
     
     DB_URL=$(jq -r '.db_url' "$config_file")
-    RSAS_CONF=$(jq -r '.rsas_conf' "$config_file")
+    ICECAST_CONF=$(jq -r '.icecast_conf' "$config_file")
     DOWNLOADS_DIR=$(jq -r '.downloads_dir' "$config_file")
     RCLONE_CONF=$(jq -r '.rclone_conf' "$config_file")
     DB_PATH=$(jq -r '.db_path' "$config_file")
@@ -63,7 +63,7 @@ load_config() {
     
     log_message "=== Configuration ==="
     log_message "DB_URL: $DB_URL"
-    log_message "RSAS_CONF: $RSAS_CONF"
+    log_message "ICECAST_CONF: $ICECAST_CONF"
     log_message "DOWNLOADS_DIR: $DOWNLOADS_DIR"
     log_message "QUEUE_DIR: $QUEUE_DIR"
     log_message "RCLONE_CONF: $RCLONE_CONF"
@@ -82,30 +82,29 @@ download_database() {
     fi
 }
 
-start_rsas() {
-    log_message "Starting RSAS with config: $RSAS_CONF"
+start_icecast() {
+    log_message "Starting RSAS with config: $ICECAST_CONF"
     
-    if [ ! -f "$RSAS_CONF" ]; then
-        log_message "Error: Config file not found: $RSAS_CONF"
+    if [ ! -f "$ICECAST_CONF" ]; then
+        log_message "Error: Config file not found: $ICECAST_CONF"
         exit 1
     fi
     
-    rsas -c "$RSAS_CONF" 2>&1 &
-    RSAS_PID=$!
-    log_message "RSAS started with PID: $RSAS_PID"
+    icecast -c "$ICECAST_CONF" 2>&1 &
+    ICECAST_PID=$!
+    log_message "Icecast started with PID: $ICECAST_PID"
     
-    # Wait for RSAS to start with retries
     local retries=5
     while [ $retries -gt 0 ]; do
         sleep 1
-        if kill -0 $RSAS_PID 2>/dev/null; then
-            log_message "RSAS is running successfully"
+        if kill -0 $ICECAST_PID 2>/dev/null; then
+            log_message "Icecast is running successfully"
             return 0
         fi
         retries=$((retries - 1))
     done
     
-    log_message "Error: RSAS failed to start"
+    log_message "Error: Icecast failed to start"
     exit 1
 }
 
@@ -121,7 +120,6 @@ start_mosquitto() {
     MOSQUITTO_PID=$!
     log_message "Mosquitto started with PID: $MOSQUITTO_PID"
     
-    # Wait for mosquitto to start with retries
     local retries=5
     while [ $retries -gt 0 ]; do
         sleep 1
@@ -139,9 +137,9 @@ start_mosquitto() {
 check_services_health() {
     local all_healthy=true
     
-    if [ -n "$RSAS_PID" ]; then
-        if ! kill -0 $RSAS_PID 2>/dev/null; then
-            log_message "WARNING: RSAS (PID $RSAS_PID) is not running!"
+    if [ -n "$ICECAST_PID" ]; then
+        if ! kill -0 $ICECAST_PID 2>/dev/null; then
+            log_message "WARNING: Icecast (PID $ICECAST_PID) is not running!"
             all_healthy=false
         fi
     fi
@@ -260,7 +258,7 @@ play_track() {
     set -o pipefail
 
     ffmpeg -nostdin -hide_banner -progress pipe:1 -stats_period 2 \
-        -readrate 1.02 -readrate_initial_burst 60 -i "$fullname" \
+        -readrate 1 -readrate_initial_burst 60 -i "$fullname" \
         -c:a copy -f $audio_format -content_type "$content_type" \
         "icecast://source:hackme@localhost:8000/stream" 2>&1 | \
         mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT -t "music/log" -l &
@@ -378,7 +376,7 @@ main() {
     load_config
     start_mosquitto
     download_database
-    start_rsas
+    start_icecast
     playback_loop
 }
 
