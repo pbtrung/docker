@@ -181,27 +181,81 @@ start_ffmpeg() {
     exit 1
 }
 
+restart_icecast() {
+    log_message "Restarting Icecast..."
+    
+    if [ -n "$ICECAST_PID" ] && kill -0 $ICECAST_PID 2>/dev/null; then
+        kill $ICECAST_PID 2>/dev/null || true
+        sleep 1
+    fi
+    
+    # Kill any orphaned icecast processes
+    pkill -P $$ icecast 2>/dev/null || true
+    
+    start_icecast
+}
+
+restart_mosquitto() {
+    log_message "Restarting Mosquitto..."
+    
+    if [ -n "$MOSQUITTO_PID" ] && kill -0 $MOSQUITTO_PID 2>/dev/null; then
+        kill $MOSQUITTO_PID 2>/dev/null || true
+        sleep 1
+    fi
+    
+    # Kill any orphaned mosquitto processes
+    pkill -P $$ mosquitto 2>/dev/null || true
+    
+    start_mosquitto
+}
+
+restart_ffmpeg() {
+    log_message "Restarting FFmpeg..."
+    
+    if [ -n "$FFMPEG_PID" ] && kill -0 $FFMPEG_PID 2>/dev/null; then
+        kill $FFMPEG_PID 2>/dev/null || true
+        sleep 1
+    fi
+    
+    # Kill any orphaned ffmpeg processes
+    pkill -P $$ ffmpeg 2>/dev/null || true
+    
+    start_ffmpeg
+}
+
 check_services_health() {
     local all_healthy=true
     
     if [ -n "$ICECAST_PID" ]; then
         if ! kill -0 $ICECAST_PID 2>/dev/null; then
-            log_message "WARNING: Icecast is not running!"
-            all_healthy=false
+            log_message "WARNING: Icecast is not running! Attempting restart..."
+            restart_icecast
+            if [ $? -ne 0 ]; then
+                log_message "ERROR: Failed to restart Icecast"
+                all_healthy=false
+            fi
         fi
     fi
     
     if [ -n "$MOSQUITTO_PID" ]; then
         if ! kill -0 $MOSQUITTO_PID 2>/dev/null; then
-            log_message "WARNING: Mosquitto is not running!"
-            all_healthy=false
+            log_message "WARNING: Mosquitto is not running! Attempting restart..."
+            restart_mosquitto
+            if [ $? -ne 0 ]; then
+                log_message "ERROR: Failed to restart Mosquitto"
+                all_healthy=false
+            fi
         fi
     fi
 
-     if [ -n "$FFMPEG_PID" ]; then
+    if [ -n "$FFMPEG_PID" ]; then
         if ! kill -0 $FFMPEG_PID 2>/dev/null; then
-            log_message "WARNING: FFmpeg is not running!"
-            all_healthy=false
+            log_message "WARNING: FFmpeg is not running! Attempting restart..."
+            restart_ffmpeg
+            if [ $? -ne 0 ]; then
+                log_message "ERROR: Failed to restart FFmpeg"
+                all_healthy=false
+            fi
         fi
     fi
     
