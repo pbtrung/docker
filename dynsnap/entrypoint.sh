@@ -384,8 +384,7 @@ mqtt_log_pipe() {
             }
             count++
 
-            # If buffer reached 2 lines → flush it
-            if (count >= 2) {
+            if (count >= 3) {
                 print buffer
                 fflush()
                 buffer = ""
@@ -394,8 +393,7 @@ mqtt_log_pipe() {
         }
 
         END {
-            # Flush remaining lines (if any)
-            if (count > 0) {
+            if (count >= 3) {
                 print buffer
                 fflush()
             }
