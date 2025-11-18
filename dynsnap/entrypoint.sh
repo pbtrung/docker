@@ -6,6 +6,7 @@ set -eu
 # Global PID tracking
 ICECAST_PID=""
 MOSQUITTO_PID=""
+FFMPEG_PID=""
 
 # Failure tracking
 CONSECUTIVE_FAILURES=0
@@ -26,6 +27,7 @@ log_message() {
 
 cleanup() {
     log_message "Cleaning up..."
+    exec 3>&- 2>/dev/null || true
     pkill -P $$ ffmpeg 2>/dev/null || true
     
     if [ -n "$DOWNLOAD_PID" ] && kill -0 $DOWNLOAD_PID 2>/dev/null; then
@@ -39,7 +41,12 @@ cleanup() {
     if [ -n "$MOSQUITTO_PID" ] && kill -0 $MOSQUITTO_PID 2>/dev/null; then
         kill $MOSQUITTO_PID 2>/dev/null || true
     fi
-    
+
+    if [ -n "$FFMPEG_PID" ] && kill -0 $FFMPEG_PID 2>/dev/null; then
+        kill $FFMPEG_PID 2>/dev/null || true
+    fi
+
+    rm -f "$PCMFIFO" 2>/dev/null || true
     exit 1
 }
 
@@ -52,6 +59,7 @@ load_config() {
     ICECAST_CONF=$(jq -r '.icecast_conf' "$config_file")
     DOWNLOADS_DIR=$(jq -r '.downloads_dir' "$config_file")
     RCLONE_CONF=$(jq -r '.rclone_conf' "$config_file")
+    PCMFIFO=$(jq -r '.pcmfifo' "$config_file")
     DB_PATH=$(jq -r '.db_path' "$config_file")
     MOSQUITTO_CONF=$(jq -r '.mosquitto_conf' "$config_file")
     MOSQUITTO_HOST=$(jq -r '.mosquitto_host' "$config_file")
@@ -67,6 +75,7 @@ load_config() {
     log_message "DOWNLOADS_DIR: $DOWNLOADS_DIR"
     log_message "QUEUE_DIR: $QUEUE_DIR"
     log_message "RCLONE_CONF: $RCLONE_CONF"
+    log_message "PCMFIFO: $PCMFIFO"
     log_message "DB_PATH: $DB_PATH"
     log_message "MOSQUITTO_CONF: $MOSQUITTO_CONF"
     log_message "MOSQUITTO_HOST: $MOSQUITTO_HOST"
@@ -134,19 +143,66 @@ start_mosquitto() {
     exit 1
 }
 
+start_ffmpeg() {
+    log_message "Starting ffmpeg encoder..."
+    
+    # Close fd 3 if it's open (from previous run)
+    exec 3>&- 2>/dev/null || true
+    
+    rm -f "$PCMFIFO"
+    mkfifo "$PCMFIFO"
+
+    set -o pipefail
+    ffmpeg -nostdin -hide_banner -progress pipe:1 -stats_period 2 \
+        -readrate 1 -readrate_initial_burst 40 \
+        -f s16le -ar 48000 -ac 2 -i "$PCMFIFO" \
+        -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
+        -ar 48000 -sample_fmt s16 -ac 2 \
+        -c:a flac -compression_level 6 \
+        -f ogg -content_type application/ogg \
+        "icecast://source:hackme@localhost:8000/stream.ogg" 2>&1 | \
+        mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT -t "music/log" -l &
+    FFMPEG_PID=$!
+    log_message "FFmpeg started with PID: $FFMPEG_PID"
+    
+    local retries=5
+    while [ $retries -gt 0 ]; do
+        sleep 1
+        if kill -0 $FFMPEG_PID 2>/dev/null; then
+            log_message "FFmpeg is running successfully"
+            # Open the FIFO write-end to keep it open permanently
+            # This must happen AFTER ffmpeg has opened the read-end
+            exec 3>"$PCMFIFO"
+            log_message "FIFO holder established"
+            return 0
+        fi
+        retries=$((retries - 1))
+    done
+    
+    log_message "Error: ffmpeg failed to start"
+    exit 1
+}
+
 check_services_health() {
     local all_healthy=true
     
     if [ -n "$ICECAST_PID" ]; then
         if ! kill -0 $ICECAST_PID 2>/dev/null; then
-            log_message "WARNING: Icecast (PID $ICECAST_PID) is not running!"
+            log_message "WARNING: Icecast is not running!"
             all_healthy=false
         fi
     fi
     
     if [ -n "$MOSQUITTO_PID" ]; then
         if ! kill -0 $MOSQUITTO_PID 2>/dev/null; then
-            log_message "WARNING: Mosquitto (PID $MOSQUITTO_PID) is not running!"
+            log_message "WARNING: Mosquitto is not running!"
+            all_healthy=false
+        fi
+    fi
+
+     if [ -n "$FFMPEG_PID" ]; then
+        if ! kill -0 $FFMPEG_PID 2>/dev/null; then
+            log_message "WARNING: FFmpeg is not running!"
             all_healthy=false
         fi
     fi
@@ -214,6 +270,58 @@ mqtt_message() {
         -t "$topic" -m "$msg" -r 2>/dev/null || true
 }
 
+detect_audio_format() {
+    local fullname="$1"
+    
+    local audio_format
+    audio_format=$(ffprobe -v error -select_streams a:0 \
+        -show_entries stream=codec_name \
+        -of default=noprint_wrappers=1:nokey=1 \
+        "$fullname" 2>/dev/null)
+    
+    if [ -z "$audio_format" ]; then
+        return 1
+    fi
+    
+    echo "$audio_format"
+    return 0
+}
+
+extract_metadata() {
+    local fullname="$1"
+    local audio_format="$2"
+    
+    local metadata
+    case "$audio_format" in
+        opus)
+            metadata=$(opusinfo "$fullname" 2>&1)
+            ;;
+        mp3)
+            metadata=$(mpg123-id3dump "$fullname" 2>&1)
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    
+    mqtt_message "$metadata" "music/info"
+    return 0
+}
+
+mqtt_log_pipe() {
+    stdbuf -oL awk '
+        BEGIN { last_time = systime() }
+        {
+            current_time = systime()
+            if (current_time - last_time >= 2) {
+                print
+                system("")
+                last_time = current_time
+            }
+        }
+    ' | mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT -t "music/log" -l
+}
+
 play_track() {
     local fullname="$1"
 
@@ -224,55 +332,44 @@ play_track() {
 
     log_message "Streaming: $fullname"
 
+    # Detect audio format
     local audio_format
-    audio_format=$(ffprobe -v error -select_streams a:0 \
-        -show_entries stream=codec_name \
-        -of default=noprint_wrappers=1:nokey=1 \
-        "$fullname" 2>/dev/null)
-    
-    if [ -z "$audio_format" ]; then
+    audio_format=$(detect_audio_format "$fullname")
+    if [ $? -ne 0 ]; then
         log_message "Error: Could not determine audio format"
         rm -f "$fullname"
         return 1
     fi
     
     log_message "Detected format: $audio_format"
-
-    opus_metadata=$(opusinfo "$fullname" 2>&1)
-    mqtt_message "$opus_metadata" "music/info"
     
-    local content_type
-    case "$audio_format" in
-        opus)
-            content_type="application/ogg"
-            ;;
-        mp3)
-            content_type="audio/mpeg"
-            ;;
-        *)
-            log_message "Warning: Unsupported format $audio_format, defaulting to audio/mpeg"
-            content_type="audio/mpeg"
-            ;;
-    esac
-    
-    set -o pipefail
-
-    ffmpeg -nostdin -hide_banner -progress pipe:1 -stats_period 2 \
-        -readrate 1 -readrate_initial_burst 60 -i "$fullname" \
-        -c:a copy -f $audio_format -content_type "$content_type" \
-        "icecast://source:hackme@localhost:8000/stream" 2>&1 | \
-        mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT -t "music/log" -l &
-    local pipeline_pid=$!
-    
-    wait $pipeline_pid
-    local ffmpeg_status=$?
-    
-    if [ $ffmpeg_status -ne 0 ]; then
-        log_message "Error: Streaming to Icecast failed (exit code: $ffmpeg_status)"
-        rm -f "$fullname"
+    # Extract and publish metadata
+    if ! extract_metadata "$fullname" "$audio_format"; then
+        log_message "Error: Unsupported format $audio_format"
         return 1
     fi
     
+    # Decode audio with stderr logging to MQTT
+    local decode_result=0
+    case "$audio_format" in
+        opus)
+            opusdec --rate 48000 --force-stereo "$fullname" - \
+                2> >(mqtt_log_pipe) \
+                > "$PCMFIFO" || decode_result=$?
+            ;;
+        mp3)
+            mpg123 --rate 48000 --encoding s16 --stereo --long-tag -v -s "$fullname" \
+                2> >(mqtt_log_pipe) \
+                > "$PCMFIFO" || decode_result=$?
+            ;;
+    esac
+    
+    if [ $decode_result -ne 0 ]; then
+        log_message "Error: Decode $fullname failed"
+        rm -f "$fullname"
+        return 1
+    fi
+
     rm -f "$fullname"
     log_message "Finished streaming: $fullname"
     return 0
@@ -377,6 +474,7 @@ main() {
     start_mosquitto
     download_database
     start_icecast
+    start_ffmpeg
     playback_loop
 }
 
