@@ -362,36 +362,11 @@ extract_metadata() {
 
 mqtt_log_pipe() {
     stdbuf -oL awk '
-        BEGIN { 
-            last_time = systime()
-            buffer = ""
-            last_position = ""
-        }
         {
-            current_time = systime()
-            
-            # Check if this is a position line (starts with [/, [-, [\, or [|)
-            if ($0 ~ /^\[[\/-\\\|]\]/) {
-                last_position = $0
-            } else {
-                # Non-position line, add to buffer immediately
-                buffer = buffer $0 "\n"
-            }
-            
-            # Send every 2 seconds
-            if (current_time - last_time >= 2) {
-                # Add the last position line if we have one
-                if (last_position != "") {
-                    buffer = buffer last_position "\n"
-                    last_position = ""
-                }
-                
-                if (buffer != "") {
-                    printf "%s", buffer
-                    system("")
-                    buffer = ""
-                }
-                last_time = current_time
+            # Skip position lines (starts with [/, [-, [\, or [|)
+            if ($0 !~ /^\[[\/-\\\|]\]/) {
+                print
+                system("")
             }
         }
     ' | mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT -t "music/log" -l
