@@ -408,7 +408,7 @@ play_track() {
                 > "$PCMFIFO" || decode_result=$?
             ;;
         mp3)
-            mpg123 --rate 48000 --encoding s16 --stereo --long-tag -v -s "$fullname" \
+            mpg123 --rate 48000 --encoding s16 --stereo --long-tag -s "$fullname" \
                 2> >(mqtt_log_pipe) \
                 > "$PCMFIFO" || decode_result=$?
             ;;
