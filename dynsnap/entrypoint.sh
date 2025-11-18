@@ -369,8 +369,10 @@ mqtt_log_pipe() {
         {
             # Remove carriage returns
             gsub(/\r/, "")
+            # Strip ANSI escape sequences
+            gsub(/\x1B\[[0-9;]*[A-Za-z]/, "")
 
-           # Spinner / position lines: [/], [-], [\], [|] at start of line
+            # Spinner / position lines: [/], [-], [\], [|] at start of line
             if ($0 ~ /^\[[\/\\|\-]\]/) {
                 # On spinner: flush buffer if it has content
                 if (buffer != "") {
