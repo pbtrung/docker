@@ -64,7 +64,6 @@ load_config() {
     MOSQUITTO_CONF=$(jq -r '.mosquitto_conf' "$config_file")
     MOSQUITTO_HOST=$(jq -r '.mosquitto_host' "$config_file")
     MOSQUITTO_PORT=$(jq -r '.mosquitto_port' "$config_file")
-    MOSQUITTO_CLIENT_ID=$(jq -r '.mosquitto_client_id' "$config_file")
     
     # Set up queue directory
     QUEUE_DIR="$DOWNLOADS_DIR/queue"
@@ -81,7 +80,6 @@ load_config() {
     log_message "MOSQUITTO_CONF: $MOSQUITTO_CONF"
     log_message "MOSQUITTO_HOST: $MOSQUITTO_HOST"
     log_message "MOSQUITTO_PORT: $MOSQUITTO_PORT"
-    log_message "MOSQUITTO_CLIENT_ID: $MOSQUITTO_CLIENT_ID"
     log_message "===================="
 }
 
@@ -376,9 +374,7 @@ mqtt_log_pipe() {
             print
             fflush()
         }
-    ' | mosquitto_pub -h "$MOSQUITTO_HOST" -p "$MOSQUITTO_PORT" \
-        -t "music/log" -l -r \
-        --qos 1 --id "$MOSQUITTO_CLIENT_ID" --disable-clean-session
+    ' | mosquitto_pub -h "$MOSQUITTO_HOST" -p "$MOSQUITTO_PORT" -t "music/log" -l -r
 }
 
 play_track() {
