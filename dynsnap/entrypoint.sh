@@ -85,14 +85,14 @@ load_config() {
 
 download_database() {
     log_message "Downloading database..."
-    if ! wget -O "$DB_PATH" "$DB_URL" 2>&1; then
+    if ! wget -nv -O "$DB_PATH" "$DB_URL" 2>&1; then
         log_message "Error: Failed to download database from $DB_URL"
         exit 1
     fi
 }
 
 start_icecast() {
-    log_message "Starting RSAS with config: $ICECAST_CONF"
+    log_message "Starting Icecast with config: $ICECAST_CONF"
     
     if [ ! -f "$ICECAST_CONF" ]; then
         log_message "Error: Config file not found: $ICECAST_CONF"
@@ -152,14 +152,14 @@ start_ffmpeg() {
     rm -f "$PCMFIFO"
     mkfifo "$PCMFIFO"
 
-    ffmpeg -nostdin -hide_banner -progress pipe:1 -stats_period 2 \
-        -readrate 1 -readrate_initial_burst 40 \
+    ffmpeg -nostdin -hide_banner -loglevel error \
+        -readrate 1 -readrate_initial_burst 60 \
         -f s16le -ar 48000 -ac 2 -i "$PCMFIFO" \
         -af "dynaudnorm=f=500:g=31:p=0.95:m=8:r=0.22:s=25.0" \
         -ar 48000 -sample_fmt s16 -ac 2 \
         -c:a flac -compression_level 6 \
         -f ogg -content_type application/ogg \
-        "icecast://source:hackme@localhost:8000/stream.ogg" &
+        "icecast://source:hackme@localhost:8000/stream" &
     FFMPEG_PID=$!
     log_message "FFmpeg started with PID: $FFMPEG_PID"
     
