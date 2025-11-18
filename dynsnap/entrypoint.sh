@@ -406,12 +406,10 @@ play_track() {
     case "$audio_format" in
         opus)
             opusdec --rate 48000 --force-stereo "$fullname" - \
-                2> >(mqtt_log_pipe) \
                 > "$PCMFIFO" || decode_result=$?
             ;;
         mp3)
             mpg123 --rate 48000 --encoding s16 --stereo --long-tag -v -s "$fullname" \
-                2> >(mqtt_log_pipe) \
                 > "$PCMFIFO" || decode_result=$?
             ;;
     esac
