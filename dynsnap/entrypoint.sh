@@ -384,7 +384,7 @@ mqtt_log_pipe() {
             }
             count++
 
-            if (count >= 3) {
+            if (count >= 2) {
                 print buffer
                 fflush()
                 buffer = ""
@@ -393,7 +393,7 @@ mqtt_log_pipe() {
         }
 
         END {
-            if (count >= 3) {
+            if (count >= 2) {
                 print buffer
                 fflush()
             }
