@@ -362,14 +362,35 @@ extract_metadata() {
 
 mqtt_log_pipe() {
     stdbuf -oL awk '
+        BEGIN {
+            buffer = ""
+        }
         {
-            # Skip position lines (starts with [/, [-, [\, or [|)
-            if ($0 !~ /^\[[\/-\\\|]\]/) {
-                print
+            # Check if this is a position line (starts with [/, [-, [\, or [|)
+            if ($0 ~ /^\[[\/-\\\|]\]/) {
+                # Found a position line - flush buffer if not empty
+                if (buffer != "") {
+                    print buffer
+                    system("")
+                    buffer = ""
+                }
+            } else {
+                # Not a position line - add to buffer
+                if (buffer == "") {
+                    buffer = $0
+                } else {
+                    buffer = buffer "\n" $0
+                }
+            }
+        }
+        END {
+            # Flush any remaining buffer at end
+            if (buffer != "") {
+                print buffer
                 system("")
             }
         }
-    ' | mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT -t "music/log" -l
+    ' | mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT -t "music/log" -l -r
 }
 
 play_track() {
