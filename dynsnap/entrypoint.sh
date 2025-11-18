@@ -362,12 +362,14 @@ extract_metadata() {
 
 mqtt_log_pipe() {
     stdbuf -oL awk '
-        BEGIN { last_time = systime() }
+        BEGIN { last_time = systime(); buffer = "" }
         {
+            buffer = buffer $0 "\n"
             current_time = systime()
             if (current_time - last_time >= 2) {
-                print
+                printf "%s", buffer
                 system("")
+                buffer = ""
                 last_time = current_time
             }
         }
@@ -406,10 +408,12 @@ play_track() {
     case "$audio_format" in
         opus)
             opusdec --rate 48000 --force-stereo "$fullname" - \
+                2> >(mqtt_log_pipe) \
                 > "$PCMFIFO" || decode_result=$?
             ;;
         mp3)
             mpg123 --rate 48000 --encoding s16 --stereo --long-tag -v -s "$fullname" \
+                2> >(mqtt_log_pipe) \
                 > "$PCMFIFO" || decode_result=$?
             ;;
     esac
