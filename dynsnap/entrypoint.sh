@@ -364,38 +364,34 @@ mqtt_log_pipe() {
     stdbuf -oL awk '
         BEGIN {
             buffer = ""
-            count = 0
         }
 
         {
             # Remove carriage returns
             gsub(/\r/, "")
 
-            # Skip spinner / position lines
+           # Spinner / position lines: [/], [-], [\], [|] at start of line
             if ($0 ~ /^\[[\/\\|\-]\]/) {
-                next
+                # On spinner: flush buffer if it has content
+                if (buffer != "") {
+                    print buffer
+                    fflush()
+                    buffer = ""
+                }
+                next  # Don’t output the spinner line itself
             }
 
-            # Add line to buffer
-            if (count == 0) {
+            # Non-spinner line: add to buffer
+            if (buffer == "") {
                 buffer = $0
             } else {
                 buffer = buffer "\n" $0
-            }
-            count++
-
-            # If buffer reached 2 lines → flush it
-            if (count >= 2) {
-                print buffer
-                fflush()
-                buffer = ""
-                count = 0
             }
         }
 
         END {
             # Flush remaining lines (if any)
-            if (count > 0) {
+            if (buffer != "") {
                 print buffer
                 fflush()
             }
