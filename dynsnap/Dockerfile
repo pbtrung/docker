@@ -3,7 +3,7 @@ FROM alpine:edge
 RUN apk update && \
     apk --no-cache upgrade && \
     apk --no-cache add wget coreutils sqlite jq rclone \
-        ffmpeg opus-tools icecast mailcap \
+        ffmpeg opus-tools mpg123 icecast mailcap \
         mosquitto mosquitto-clients
 
 WORKDIR /script
