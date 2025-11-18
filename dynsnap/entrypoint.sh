@@ -152,7 +152,6 @@ start_ffmpeg() {
     rm -f "$PCMFIFO"
     mkfifo "$PCMFIFO"
 
-    set -o pipefail
     ffmpeg -nostdin -hide_banner -progress pipe:1 -stats_period 2 \
         -readrate 1 -readrate_initial_burst 40 \
         -f s16le -ar 48000 -ac 2 -i "$PCMFIFO" \
@@ -160,8 +159,7 @@ start_ffmpeg() {
         -ar 48000 -sample_fmt s16 -ac 2 \
         -c:a flac -compression_level 6 \
         -f ogg -content_type application/ogg \
-        "icecast://source:hackme@localhost:8000/stream.ogg" 2>&1 | \
-        mosquitto_pub -h $MOSQUITTO_HOST -p $MOSQUITTO_PORT -t "music/log" -l &
+        "icecast://source:hackme@localhost:8000/stream.ogg" &
     FFMPEG_PID=$!
     log_message "FFmpeg started with PID: $FFMPEG_PID"
     
