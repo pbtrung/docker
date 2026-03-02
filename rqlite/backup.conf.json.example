@@ -4,6 +4,7 @@
 	"interval": "5m",
 	"vacuum": false,
 	"sub": {
+    "endpoint": "$ENDPOINT",
 		"access_key_id": "$ACCESS_KEY_ID",
 		"secret_access_key": "$SECRET_ACCESS_KEY_ID",
 		"region": "$BUCKET_REGION",
