@@ -155,5 +155,5 @@ if [ -f "$NGINX_CONF" ]; then
   nginx -c "$nginx_rendered"
 fi
 
-chown rqlite:rqlite $RQLITE_BACKUP
+chown rqlite:rqlite "$RQLITE_BACKUP"
 exec su-exec rqlite "$@"
