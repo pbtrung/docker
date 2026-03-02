@@ -14,3 +14,4 @@ EXPOSE 4001 4002
 USER rqlite
 
 ENTRYPOINT ["/script/entrypoint.sh"]
+CMD ["run"]
