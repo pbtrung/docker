@@ -140,11 +140,14 @@ run)
 esac
 
 if [ -f "$NGINX_CONF" ]; then
+  NGINX_HTPASSWD="${NGINX_HTPASSWD:-/etc/nginx/.htpasswd}"
   if [ -n "$NGINX_USER" ] && [ -n "$NGINX_PASSWORD" ]; then
-    printf "%s" "$NGINX_PASSWORD" | htpasswd -ic /etc/nginx/.htpasswd "$NGINX_USER"
+    printf "%s" "$NGINX_PASSWORD" | htpasswd -ic "$NGINX_HTPASSWD" "$NGINX_USER"
   fi
+  nginx_rendered="/tmp/nginx_rendered.conf"
+  envsubst '$NGINX_HTPASSWD' < "$NGINX_CONF" > "$nginx_rendered"
   printf "Starting nginx with config: %s\n" "$NGINX_CONF"
-  nginx -c "$NGINX_CONF"
+  nginx -c "$nginx_rendered"
 fi
 
 exec su-exec rqlite "$@"
