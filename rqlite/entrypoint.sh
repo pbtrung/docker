@@ -150,9 +150,10 @@ if [ -f "$NGINX_CONF" ]; then
     printf "%s" "$NGINX_PASSWORD" | htpasswd -ic "$NGINX_HTPASSWD" "$NGINX_USER"
   fi
   nginx_rendered="/tmp/nginx_rendered.conf"
-  envsubst '$NGINX_HTPASSWD' < "$NGINX_CONF" > "$nginx_rendered"
+  envsubst '$NGINX_HTPASSWD' <"$NGINX_CONF" >"$nginx_rendered"
   printf "Starting nginx with config: %s\n" "$NGINX_CONF"
   nginx -c "$nginx_rendered"
 fi
 
+chown rqlite:rqlite $RQLITE_BACKUP
 exec su-exec rqlite "$@"
