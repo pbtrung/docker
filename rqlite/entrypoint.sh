@@ -107,8 +107,8 @@ if [ -n "$ENABLE_FK" ]; then
 fi
 
 auto_backup_flag=""
-if [ -n "$RQLITE_BACKUP" ]; then
-  auto_backup_flag="-auto-backup $RQLITE_BACKUP"
+if [ -n "$RQLITE_BACKUP_CONF" ]; then
+  auto_backup_flag="-auto-backup $RQLITE_BACKUP_CONF"
 fi
 
 # When running on Kubernetes, delay a small time so DNS records
@@ -157,5 +157,5 @@ fi
 
 mkdir -p "$data_dir"
 chown rqlite:rqlite "$data_dir"
-[ -n "$RQLITE_BACKUP" ] && chown rqlite:rqlite "$RQLITE_BACKUP"
+[ -n "$RQLITE_BACKUP_CONF" ] && chown rqlite:rqlite "$RQLITE_BACKUP_CONF"
 exec su-exec rqlite "$@"
