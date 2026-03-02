@@ -17,6 +17,14 @@ DEFAULT_ADV_ADDRESS=$(hostname -f)
 CMD=$1
 ARGS="$@"
 
+# nginx reverse proxy — set NGINX_CONF to the path of your nginx config.
+# Defaults to /script/nginx.conf (bundled). Set to empty string to disable.
+NGINX_CONF="${NGINX_CONF:-/script/nginx.conf}"
+if [ -f "$NGINX_CONF" ]; then
+  # rqlite binds on an internal port; nginx fronts 4001 externally
+  HTTP_ADDR="${HTTP_ADDR:-127.0.0.1:14001}"
+fi
+
 contains "-http-addr" $ARGS
 if [ $? -eq 0 ]; then
   HTTP_ADDR="${HTTP_ADDR:-0.0.0.0:4001}"
@@ -131,4 +139,12 @@ run)
   ;;
 esac
 
-exec "$@"
+if [ -f "$NGINX_CONF" ]; then
+  if [ -n "$NGINX_USER" ] && [ -n "$NGINX_PASSWORD" ]; then
+    printf "%s" "$NGINX_PASSWORD" | htpasswd -ic /etc/nginx/.htpasswd "$NGINX_USER"
+  fi
+  printf "Starting nginx with config: %s\n" "$NGINX_CONF"
+  nginx -c "$NGINX_CONF"
+fi
+
+exec su-exec rqlite "$@"
