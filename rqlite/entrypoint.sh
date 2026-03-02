@@ -106,6 +106,11 @@ if [ -n "$ENABLE_FK" ]; then
   fk_flag="-fk"
 fi
 
+auto_backup_flag=""
+if [ -n "$RQLITE_BACKUP" ]; then
+  auto_backup_flag="-auto-backup $RQLITE_BACKUP"
+fi
+
 # When running on Kubernetes, delay a small time so DNS records
 # are configured across the cluster when this rqlited comes up. Because
 # rqlite does node-discovery using a headless service, it must have
@@ -122,7 +127,7 @@ fi
 [ -n "$START_DELAY" ] && sleep "$START_DELAY"
 
 RQLITED=/usr/bin/rqlited
-rqlited_commands="$RQLITED $node_id $http_addr $http_adv_addr $raft_addr $raft_adv_addr $extensions_path_flag $fk_flag"
+rqlited_commands="$RQLITED $node_id $http_addr $http_adv_addr $raft_addr $raft_adv_addr $extensions_path_flag $fk_flag $auto_backup_flag"
 
 data_dir="${DATA_DIR:-/rqlite/file/data}"
 
