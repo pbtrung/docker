@@ -126,7 +126,7 @@ if [ -n "$KUBERNETES_SERVICE_HOST" ] && [ -z "$START_DELAY" ]; then
 fi
 [ -n "$START_DELAY" ] && sleep "$START_DELAY"
 
-RQLITED=/usr/bin/rqlited
+RQLITED=/usr/local/bin/rqlited
 rqlited_commands="$RQLITED $node_id $http_addr $http_adv_addr $raft_addr $raft_adv_addr $extensions_path_flag $fk_flag $auto_backup_flag"
 
 data_dir="${DATA_DIR:-/rqlite/file/data}"
