@@ -89,7 +89,9 @@ if [ -f "$CFMESH_CONF" ]; then
     exit 1
   fi
   printf "Starting wireproxy on cfmesh, forwarding tcp ports: %s\n" "$CFMESH_TCP_PORTS"
-  su-exec soju wireproxy -c /etc/wireproxy/wireproxy.conf &
+  # -i: local status endpoint, `wget -qO- 127.0.0.1:9080/metrics` shows
+  # per-peer rx_bytes/tx_bytes/last_handshake for debugging the tunnel
+  su-exec soju wireproxy -i 127.0.0.1:9080 -c /etc/wireproxy/wireproxy.conf &
 else
   printf "No WireGuard config at %s, skipping cfmesh\n" "$CFMESH_CONF"
 fi
