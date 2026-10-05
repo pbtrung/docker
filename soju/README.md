@@ -45,7 +45,8 @@ Northflank volume.
 | `SOJU_CONFIG_FILE`    | —                                             | Path to a complete soju config. If set, the env vars above that build the config are ignored |
 | `GAMJA_CONFIG_JSON`   | `{"server":{"auth":"mandatory","ping":30}}`   | gamja [config file] contents, served at `/config.json` |
 | `DATA_DIR`            | `/data`                                       | Where the DB and uploads are stored |
-| `CFMESH_CONF`         | `/data/cfmesh.conf`                           | WireGuard config for the `cfmesh` interface. Skipped if the file doesn't exist |
+| `CFMESH_CONF`         | `/data/cfmesh.conf`                           | WireGuard config for the mesh (run with wireproxy). Skipped if the file doesn't exist |
+| `CFMESH_TCP_PORTS`    | `6667`                                        | Space-separated local TCP ports published on the mesh address |
 
 Build arguments: `SOJU_REF` and `GAMJA_REF` (default `master`) select the git
 branch or tag to build, e.g. `v0.11.1`.
@@ -206,40 +207,55 @@ lives in `/data`: `main.db` and `uploads/`.
 
 ## WireGuard mesh (optional)
 
+The mesh uses [wireproxy], which runs WireGuard inside its own process. It
+needs no `NET_ADMIN`, kernel module or `/dev/net/tun`, so it works on
+Northflank, where `wg-quick` can't create an interface.
+
 If the file at `CFMESH_CONF` exists, the entrypoint:
 
-1. copies it to `/etc/wireguard/cfmesh.conf` and runs `wg-quick up cfmesh`
-2. enables ufw with `ufw default deny incoming`, `ufw default allow outgoing`
-   and `ufw allow in on cfmesh`. Besides `cfmesh`, ufw only accepts loopback
-   and replies to connections the container started.
+1. binds soju's plain IRC listener to `127.0.0.1:6667` instead of
+   `0.0.0.0:6667`, so nothing outside the container can reach it directly
+2. starts wireproxy with that config. For each port in `CFMESH_TCP_PORTS`
+   (default `6667`), wireproxy listens on this node's mesh address and
+   forwards connections to the same port on loopback.
 
-The result: soju (IRC on 6667, nginx on 8080) is reachable only through the
-mesh, e.g. `irc+insecure://<this node's cfmesh IP>:6667` from another peer.
+The result: IRC is reachable only through the mesh, e.g.
+`irc+insecure://<this node's mesh IP>:6667` from another peer. The public web
+UI on 8080 keeps working. Set `CFMESH_TCP_PORTS="6667 8080"` to also reach it
+over the mesh.
 
-- **The public Northflank URL stops working.** The load balancer can no
-  longer reach nginx on 8080, and health checks on 8080 will fail too.
-  Remove the HTTP health check, or the service will be restarted in a loop.
-- **No WireGuard port is opened.** This node must initiate the tunnel. Give
-  its `[Peer]` entries an `Endpoint` and `PersistentKeepalive = 25` so the
-  tunnel stays up and peers can reach it.
+Example `cfmesh.conf` (a standard WireGuard config):
+
+```ini
+[Interface]
+PrivateKey = <this node's private key>
+Address = 10.99.0.1/32
+
+[Peer]
+PublicKey = <peer's public key>
+Endpoint = peer.example.org:51820
+AllowedIPs = 10.99.0.0/24
+PersistentKeepalive = 25
+```
+
+- **This node must start the tunnel.** Northflank can't expose a UDP port,
+  so peers can't reach this container first. Every `[Peer]` it should talk
+  to needs an `Endpoint` and `PersistentKeepalive`.
+- If the config is invalid, the container exits with an error rather than
+  running without the mesh.
+- wireproxy only forwards TCP ports. It does not create a network interface,
+  so there's no `cfmesh` device, `ping` from inside, or routing.
 
 To provide the config on Northflank, add it as a **secret file** under the
 service's environment settings (e.g. at `/secrets/cfmesh.conf`) and set
 `CFMESH_CONF=/secrets/cfmesh.conf`. You can also put it on the volume at
 `/data/cfmesh.conf`.
 
-**Requirements:** the container needs the `NET_ADMIN` capability, and the
-host kernel needs WireGuard support. If `wg-quick up` fails, the container
-exits with an error rather than running without the mesh. Northflank runs
-workloads in a sandboxed runtime, so this may not be allowed there. Check
-the deploy logs after enabling it.
-
 ## Run locally
 
 ```sh
 docker build -t soju soju/
 docker run --rm -p 8080:8080 -p 6667:6667 -v soju-data:/data \
-  --cap-add NET_ADMIN \
   -e SOJU_HTTP_INGRESS=http://localhost:8080 \
   -e SOJU_ADMIN_USER=admin -e SOJU_ADMIN_PASSWORD=changeme \
   soju
@@ -266,4 +282,5 @@ Then open http://localhost:8080. You can also point a native IRC client at
 [gamja]: https://codeberg.org/emersion/gamja
 [kimchi]: https://codeberg.org/emersion/kimchi
 [soju-containers]: https://codeberg.org/emersion/soju-containers
+[wireproxy]: https://github.com/whyvl/wireproxy
 [config file]: https://codeberg.org/emersion/gamja/src/branch/master/doc/config-file.md

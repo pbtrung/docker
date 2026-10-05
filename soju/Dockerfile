@@ -2,13 +2,15 @@ FROM alpine:edge AS builder
 
 ARG SOJU_REF=master
 ARG GAMJA_REF=master
+ARG WIREPROXY_REF=master
 
 RUN apk update && \
     apk --no-cache upgrade && \
     apk --no-cache add build-base git go nodejs npm
 
 RUN git clone --depth 1 --branch "${SOJU_REF}" https://codeberg.org/emersion/soju.git /src/soju && \
-    git clone --depth 1 --branch "${GAMJA_REF}" https://codeberg.org/emersion/gamja.git /src/gamja
+    git clone --depth 1 --branch "${GAMJA_REF}" https://codeberg.org/emersion/gamja.git /src/gamja && \
+    git clone --depth 1 --branch "${WIREPROXY_REF}" https://github.com/whyvl/wireproxy.git /src/wireproxy
 
 # soju: static binaries with config/admin-socket paths baked in so that
 # `sojuctl` / `sojudb` work without flags inside the container shell
@@ -19,6 +21,10 @@ RUN go build -o /out/ \
         -X codeberg.org/emersion/soju/config.DefaultUnixAdminPath=/run/soju/admin.sock" \
       ./cmd/soju ./cmd/sojudb ./cmd/sojuctl
 
+# wireproxy: userspace WireGuard (no NET_ADMIN / kernel module needed)
+WORKDIR /src/wireproxy
+RUN CGO_ENABLED=0 go build -o /out/ ./cmd/wireproxy
+
 # gamja: static web client
 WORKDIR /src/gamja
 RUN npm install --include=dev && \
@@ -28,13 +34,12 @@ FROM alpine:edge
 
 RUN apk update && \
     apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata mailcap nginx \
-        su-exec wireguard-tools ufw
+    apk --no-cache add ca-certificates tzdata mailcap nginx su-exec
 
 RUN addgroup -g 1000 soju && \
     adduser -u 1000 -G soju -D soju
 
-COPY --from=builder /out/soju /out/sojudb /out/sojuctl /usr/local/bin/
+COPY --from=builder /out/soju /out/sojudb /out/sojuctl /out/wireproxy /usr/local/bin/
 COPY --from=builder /src/gamja/dist /usr/share/gamja
 
 WORKDIR /script

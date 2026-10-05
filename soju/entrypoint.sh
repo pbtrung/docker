@@ -1,13 +1,24 @@
 #!/bin/sh
 set -e
 
+# WireGuard mesh via wireproxy (userspace, works without NET_ADMIN).
 CFMESH_CONF="${CFMESH_CONF:-/data/cfmesh.conf}"
+# Space-separated local TCP ports published on the mesh address.
+CFMESH_TCP_PORTS="${CFMESH_TCP_PORTS:-6667}"
 
 # Persistent volume: SQLite DB + uploads. Mount a Northflank volume here.
 DATA_DIR="${DATA_DIR:-/data}"
 SOJU_CONF=/etc/soju/config
 
 mkdir -p "$DATA_DIR/uploads" /etc/soju /run/soju
+
+# With the mesh enabled, IRC only listens on loopback: the only way in from
+# outside is through wireproxy's tunnel on cfmesh.
+if [ -f "$CFMESH_CONF" ]; then
+  IRC_LISTEN="irc+insecure://127.0.0.1:6667"
+else
+  IRC_LISTEN="irc+insecure://0.0.0.0:6667"
+fi
 chown soju:soju "$DATA_DIR" "$DATA_DIR/uploads" /run/soju
 
 # soju config: use SOJU_CONFIG_FILE as-is if given (e.g. a Northflank secret
@@ -29,7 +40,7 @@ else
     printf "db sqlite3 %s/main.db\n" "$DATA_DIR"
     printf "message-store db\n"
     printf "file-upload fs %s/uploads/\n" "$DATA_DIR"
-    printf "listen irc+insecure://0.0.0.0:6667\n"
+    printf "listen %s\n" "$IRC_LISTEN"
     printf "listen http+insecure://127.0.0.1:8081\n"
     printf "listen unix+admin:///run/soju/admin.sock\n"
     # nginx forwards X-Forwarded-For from loopback
@@ -57,26 +68,28 @@ fi
 # aren't dropped by the Northflank load balancer.
 printf "%s\n" "${GAMJA_CONFIG_JSON:-{\"server\":{\"auth\":\"mandatory\",\"ping\":30\}\}}" >/tmp/gamja-config.json
 
-# WireGuard mesh: bring up cfmesh if a config is present, then firewall inbound
-# traffic with ufw: deny incoming, `ufw allow in on cfmesh`. No
-# ports are opened on other interfaces, so this node must initiate the
-# WireGuard handshake (Endpoint + PersistentKeepalive on its peers).
-# Needs the NET_ADMIN capability and WireGuard support in the host kernel.
+# WireGuard mesh: run wireproxy with the cfmesh config and forward each port
+# in CFMESH_TCP_PORTS from the mesh address to the same port on loopback.
+# No port is opened publicly, so this node must initiate the WireGuard
+# handshake (Endpoint + PersistentKeepalive on its [Peer] entries).
 if [ -f "$CFMESH_CONF" ]; then
-  mkdir -p /etc/wireguard
-  cp "$CFMESH_CONF" /etc/wireguard/cfmesh.conf
-  chmod 600 /etc/wireguard/cfmesh.conf
-  printf "Bringing up WireGuard interface cfmesh\n"
-  if ! wg-quick up cfmesh; then
-    printf "wg-quick up cfmesh failed (container needs NET_ADMIN and kernel WireGuard)\n"
+  mkdir -p /etc/wireproxy
+  cp "$CFMESH_CONF" /etc/wireproxy/cfmesh.conf
+  {
+    printf "WGConfig = /etc/wireproxy/cfmesh.conf\n"
+    for port in $CFMESH_TCP_PORTS; do
+      printf "\n[TCPServerTunnel]\nListenPort = %s\nTarget = 127.0.0.1:%s\n" "$port" "$port"
+    done
+  } >/etc/wireproxy/wireproxy.conf
+  chown -R soju:soju /etc/wireproxy
+  chmod 600 /etc/wireproxy/cfmesh.conf /etc/wireproxy/wireproxy.conf
+
+  if ! su-exec soju wireproxy -n -c /etc/wireproxy/wireproxy.conf; then
+    printf "Invalid WireGuard config %s\n" "$CFMESH_CONF"
     exit 1
   fi
-
-  ufw default deny incoming
-  ufw default allow outgoing
-  ufw allow in on cfmesh
-  ufw --force enable
-  printf "Firewall: inbound allowed only on cfmesh\n"
+  printf "Starting wireproxy on cfmesh, forwarding tcp ports: %s\n" "$CFMESH_TCP_PORTS"
+  su-exec soju wireproxy -c /etc/wireproxy/wireproxy.conf &
 else
   printf "No WireGuard config at %s, skipping cfmesh\n" "$CFMESH_CONF"
 fi
