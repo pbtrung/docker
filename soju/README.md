@@ -36,8 +36,8 @@ Northflank volume.
 
 | Variable              | Default                                       | Description |
 | --------------------- | --------------------------------------------- | ----------- |
-| `SOJU_HOSTNAME`       | container hostname                            | Public hostname, e.g. `p01--soju--abcd1234.code.run` or your own domain |
-| `SOJU_HTTP_INGRESS`   | `https://$SOJU_HOSTNAME`                      | Public base URL. soju builds upload links from it |
+| `SOJU_HOSTNAME`       | `soju`                                        | Server name shown to clients (gamja: "Connected to soju") |
+| `SOJU_HTTP_INGRESS`   | — (**set this**)                              | Public base URL, e.g. `https://p01--soju--abcd1234.code.run`. soju builds upload links from it |
 | `SOJU_TITLE`          | —                                             | Server title shown to clients |
 | `SOJU_ADMIN_USER`     | —                                             | Admin user created on first start (only while `/data/main.db` doesn't exist) |
 | `SOJU_ADMIN_PASSWORD` | —                                             | Password for that admin user |
@@ -45,6 +45,7 @@ Northflank volume.
 | `SOJU_CONFIG_FILE`    | —                                             | Path to a complete soju config. If set, the env vars above that build the config are ignored |
 | `GAMJA_CONFIG_JSON`   | `{"server":{"auth":"mandatory","ping":30}}`   | gamja [config file] contents, served at `/config.json` |
 | `DATA_DIR`            | `/data`                                       | Where the DB and uploads are stored |
+| `CFMESH_CONF`         | `/data/cfmesh.conf`                           | WireGuard config for the `cfmesh` interface. Skipped if the file doesn't exist |
 
 Build arguments: `SOJU_REF` and `GAMJA_REF` (default `master`) select the git
 branch or tag to build, e.g. `v0.11.1`.
@@ -97,8 +98,8 @@ SOJU_ADMIN_PASSWORD=<a strong password>
 SOJU_TITLE=My IRC
 ```
 
-Leave `SOJU_HOSTNAME` / `SOJU_HTTP_INGRESS` empty for now. You'll fill them
-in after the public URL exists (step 8).
+Leave `SOJU_HTTP_INGRESS` empty for now. You'll fill it in after the public
+URL exists (step 8).
 
 Click **Create service**. The first build takes a few minutes, mostly to
 compile soju and bundle gamja.
@@ -129,21 +130,24 @@ Service → **Health checks → Add health check**:
 - **Protocol:** HTTP, **Port:** 8080, **Path:** `/healthz`
 - Type: readiness and/or liveness
 
-### 8. Set the public hostname
+### 8. Set the public URL
 
 Copy the public URL from the service's **Ports / DNS** section, e.g.
-`https://p01--soju--abcd1234.code.run`. Then set these environment variables
+`https://p01--soju--abcd1234.code.run`. Then set this environment variable
 and save. The service restarts.
 
 ```
-SOJU_HOSTNAME=p01--soju--abcd1234.code.run
 SOJU_HTTP_INGRESS=https://p01--soju--abcd1234.code.run
 ```
 
+Without it, file upload links point to the wrong host. The server name shown
+in gamja ("Connected to soju") comes from `SOJU_HOSTNAME`, which defaults to
+`soju`.
+
 **Custom domain (optional):** add it under the service's port **Domains**
 (or the team's **Domains** page). Create the DNS record Northflank shows you
-and wait for it to verify. Then set `SOJU_HOSTNAME` / `SOJU_HTTP_INGRESS` to
-that domain instead.
+and wait for it to verify. Then set `SOJU_HTTP_INGRESS` to that domain
+instead (and `SOJU_HOSTNAME` too, if you want it shown as the server name).
 
 ### 9. Log in
 
@@ -200,12 +204,43 @@ sojuctl user status
 From the volume's page, take a backup or set up scheduled backups. Everything
 lives in `/data`: `main.db` and `uploads/`.
 
+## WireGuard mesh (optional)
+
+If the file at `CFMESH_CONF` exists, the entrypoint:
+
+1. copies it to `/etc/wireguard/cfmesh.conf` and runs `wg-quick up cfmesh`
+2. enables ufw with `ufw default deny incoming`, `ufw default allow outgoing`
+   and `ufw allow in on cfmesh`. Besides `cfmesh`, ufw only accepts loopback
+   and replies to connections the container started.
+
+The result: soju (IRC on 6667, nginx on 8080) is reachable only through the
+mesh, e.g. `irc+insecure://<this node's cfmesh IP>:6667` from another peer.
+
+- **The public Northflank URL stops working.** The load balancer can no
+  longer reach nginx on 8080, and health checks on 8080 will fail too.
+  Remove the HTTP health check, or the service will be restarted in a loop.
+- **No WireGuard port is opened.** This node must initiate the tunnel. Give
+  its `[Peer]` entries an `Endpoint` and `PersistentKeepalive = 25` so the
+  tunnel stays up and peers can reach it.
+
+To provide the config on Northflank, add it as a **secret file** under the
+service's environment settings (e.g. at `/secrets/cfmesh.conf`) and set
+`CFMESH_CONF=/secrets/cfmesh.conf`. You can also put it on the volume at
+`/data/cfmesh.conf`.
+
+**Requirements:** the container needs the `NET_ADMIN` capability, and the
+host kernel needs WireGuard support. If `wg-quick up` fails, the container
+exits with an error rather than running without the mesh. Northflank runs
+workloads in a sandboxed runtime, so this may not be allowed there. Check
+the deploy logs after enabling it.
+
 ## Run locally
 
 ```sh
 docker build -t soju soju/
 docker run --rm -p 8080:8080 -p 6667:6667 -v soju-data:/data \
-  -e SOJU_HOSTNAME=localhost -e SOJU_HTTP_INGRESS=http://localhost:8080 \
+  --cap-add NET_ADMIN \
+  -e SOJU_HTTP_INGRESS=http://localhost:8080 \
   -e SOJU_ADMIN_USER=admin -e SOJU_ADMIN_PASSWORD=changeme \
   soju
 ```

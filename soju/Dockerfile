@@ -28,7 +28,8 @@ FROM alpine:edge
 
 RUN apk update && \
     apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata mailcap nginx su-exec
+    apk --no-cache add ca-certificates tzdata mailcap nginx \
+        su-exec wireguard-tools ufw
 
 RUN addgroup -g 1000 soju && \
     adduser -u 1000 -G soju -D soju
