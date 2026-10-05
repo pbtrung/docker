@@ -66,9 +66,20 @@ printf "%s\n" "${GAMJA_CONFIG_JSON:-{\"server\":{\"auth\":\"mandatory\",\"ping\"
 # Cloudflare Tunnel (remotely managed): routes such as tcp://localhost:6667
 # or http://localhost:8080 are configured in the Cloudflare dashboard.
 # cloudflared only makes outbound connections, so no inbound port is needed.
+# Its logs go straight to the container console. If it exits, stop the
+# container: PID 1 becomes soju after the final exec, so wait for that (a
+# fast failure would otherwise signal the shell, which PID 1 ignores), then
+# SIGTERM it so soju shuts down cleanly.
 if [ -n "$CLOUDFLARED_TOKEN" ]; then
   printf "Starting cloudflared tunnel\n"
-  su-exec soju cloudflared tunnel --no-autoupdate run --token "$CLOUDFLARED_TOKEN" &
+  (
+    status=0
+    su-exec soju cloudflared tunnel --no-autoupdate --loglevel info \
+      run --token "$CLOUDFLARED_TOKEN" || status=$?
+    printf "cloudflared exited with status %s, stopping container\n" "$status"
+    while [ "$(cat /proc/1/comm)" != soju ]; do sleep 1; done
+    kill -TERM 1
+  ) &
 else
   printf "CLOUDFLARED_TOKEN not set, skipping cloudflared\n"
 fi

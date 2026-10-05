@@ -216,6 +216,10 @@ If `CLOUDFLARED_TOKEN` is set, the entrypoint:
 cloudflared only makes outbound connections to Cloudflare, so it needs no
 public or inbound port on Northflank. The public web UI on 8080 keeps working.
 
+cloudflared's logs appear in the container console. If cloudflared exits
+for any reason (bad token, crash), the container stops too and Northflank
+restarts it, so the service never keeps running without its tunnel.
+
 Set it up in the Cloudflare Zero Trust dashboard:
 
 1. **Networks → Tunnels → Create a tunnel**, type **Cloudflared**. Name it
