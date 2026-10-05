@@ -1,20 +1,15 @@
 #!/bin/sh
 set -e
 
-# WireGuard mesh via wireproxy (userspace, works without NET_ADMIN).
-CFMESH_CONF="${CFMESH_CONF:-/data/cfmesh.conf}"
-# Space-separated local TCP ports published on the mesh address.
-CFMESH_TCP_PORTS="${CFMESH_TCP_PORTS:-6667}"
-
 # Persistent volume: SQLite DB + uploads. Mount a Northflank volume here.
 DATA_DIR="${DATA_DIR:-/data}"
 SOJU_CONF=/etc/soju/config
 
 mkdir -p "$DATA_DIR/uploads" /etc/soju /run/soju
 
-# With the mesh enabled, IRC only listens on loopback: the only way in from
-# outside is through wireproxy's tunnel on cfmesh.
-if [ -f "$CFMESH_CONF" ]; then
+# With a Cloudflare Tunnel, IRC only listens on loopback: the only way in
+# from outside is through cloudflared.
+if [ -n "$CLOUDFLARED_TOKEN" ]; then
   IRC_LISTEN="irc+insecure://127.0.0.1:6667"
 else
   IRC_LISTEN="irc+insecure://0.0.0.0:6667"
@@ -68,32 +63,14 @@ fi
 # aren't dropped by the Northflank load balancer.
 printf "%s\n" "${GAMJA_CONFIG_JSON:-{\"server\":{\"auth\":\"mandatory\",\"ping\":30\}\}}" >/tmp/gamja-config.json
 
-# WireGuard mesh: run wireproxy with the cfmesh config and forward each port
-# in CFMESH_TCP_PORTS from the mesh address to the same port on loopback.
-# No port is opened publicly, so this node must initiate the WireGuard
-# handshake (Endpoint + PersistentKeepalive on its [Peer] entries).
-if [ -f "$CFMESH_CONF" ]; then
-  mkdir -p /etc/wireproxy
-  cp "$CFMESH_CONF" /etc/wireproxy/cfmesh.conf
-  {
-    printf "WGConfig = /etc/wireproxy/cfmesh.conf\n"
-    for port in $CFMESH_TCP_PORTS; do
-      printf "\n[TCPServerTunnel]\nListenPort = %s\nTarget = 127.0.0.1:%s\n" "$port" "$port"
-    done
-  } >/etc/wireproxy/wireproxy.conf
-  chown -R soju:soju /etc/wireproxy
-  chmod 600 /etc/wireproxy/cfmesh.conf /etc/wireproxy/wireproxy.conf
-
-  if ! su-exec soju wireproxy -n -c /etc/wireproxy/wireproxy.conf; then
-    printf "Invalid WireGuard config %s\n" "$CFMESH_CONF"
-    exit 1
-  fi
-  printf "Starting wireproxy on cfmesh, forwarding tcp ports: %s\n" "$CFMESH_TCP_PORTS"
-  # -i: local status endpoint, `wget -qO- 127.0.0.1:9080/metrics` shows
-  # per-peer rx_bytes/tx_bytes/last_handshake for debugging the tunnel
-  su-exec soju wireproxy -i 127.0.0.1:9080 -c /etc/wireproxy/wireproxy.conf &
+# Cloudflare Tunnel (remotely managed): routes such as tcp://localhost:6667
+# or http://localhost:8080 are configured in the Cloudflare dashboard.
+# cloudflared only makes outbound connections, so no inbound port is needed.
+if [ -n "$CLOUDFLARED_TOKEN" ]; then
+  printf "Starting cloudflared tunnel\n"
+  su-exec soju cloudflared tunnel --no-autoupdate run --token "$CLOUDFLARED_TOKEN" &
 else
-  printf "No WireGuard config at %s, skipping cfmesh\n" "$CFMESH_CONF"
+  printf "CLOUDFLARED_TOKEN not set, skipping cloudflared\n"
 fi
 
 NGINX_CONF="${NGINX_CONF:-/script/nginx.conf}"

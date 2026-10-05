@@ -45,8 +45,7 @@ Northflank volume.
 | `SOJU_CONFIG_FILE`    | —                                             | Path to a complete soju config. If set, the env vars above that build the config are ignored |
 | `GAMJA_CONFIG_JSON`   | `{"server":{"auth":"mandatory","ping":30}}`   | gamja [config file] contents, served at `/config.json` |
 | `DATA_DIR`            | `/data`                                       | Where the DB and uploads are stored |
-| `CFMESH_CONF`         | `/data/cfmesh.conf`                           | WireGuard config for the mesh (run with wireproxy). Skipped if the file doesn't exist |
-| `CFMESH_TCP_PORTS`    | `6667`                                        | Space-separated local TCP ports published on the mesh address |
+| `CLOUDFLARED_TOKEN`   | —                                             | Cloudflare Tunnel token. If set, runs cloudflared and binds IRC to loopback |
 
 Build arguments: `SOJU_REF` and `GAMJA_REF` (default `master`) select the git
 branch or tag to build, e.g. `v0.11.1`.
@@ -205,51 +204,36 @@ sojuctl user status
 From the volume's page, take a backup or set up scheduled backups. Everything
 lives in `/data`: `main.db` and `uploads/`.
 
-## WireGuard mesh (optional)
+## Cloudflare Tunnel (optional)
 
-The mesh uses [wireproxy], which runs WireGuard inside its own process. It
-needs no `NET_ADMIN`, kernel module or `/dev/net/tun`, so it works on
-Northflank, where `wg-quick` can't create an interface.
-
-If the file at `CFMESH_CONF` exists, the entrypoint:
+If `CLOUDFLARED_TOKEN` is set, the entrypoint:
 
 1. binds soju's plain IRC listener to `127.0.0.1:6667` instead of
    `0.0.0.0:6667`, so nothing outside the container can reach it directly
-2. starts wireproxy with that config. For each port in `CFMESH_TCP_PORTS`
-   (default `6667`), wireproxy listens on this node's mesh address and
-   forwards connections to the same port on loopback.
+2. runs `cloudflared tunnel --no-autoupdate run --token $CLOUDFLARED_TOKEN`
+   in the background
 
-The result: IRC is reachable only through the mesh, e.g.
-`irc+insecure://<this node's mesh IP>:6667` from another peer. The public web
-UI on 8080 keeps working. Set `CFMESH_TCP_PORTS="6667 8080"` to also reach it
-over the mesh.
+cloudflared only makes outbound connections to Cloudflare, so it needs no
+public or inbound port on Northflank. The public web UI on 8080 keeps working.
 
-Example `cfmesh.conf` (a standard WireGuard config):
+Set it up in the Cloudflare Zero Trust dashboard:
 
-```ini
-[Interface]
-PrivateKey = <this node's private key>
-Address = 10.99.0.1/32
+1. **Networks → Tunnels → Create a tunnel**, type **Cloudflared**. Name it
+   (e.g. `soju`).
+2. Copy the token from the install command shown (the long string after
+   `--token`). In Northflank, add it as a **secret** environment variable
+   `CLOUDFLARED_TOKEN` and save. The service restarts, and the tunnel shows
+   as **Healthy** in the dashboard.
+3. Add a **public hostname** route to the tunnel, for example:
+   - `irc.example.org` → `tcp://localhost:6667` for native IRC clients. On
+     each client machine, run
+     `cloudflared access tcp --hostname irc.example.org --url localhost:6667`,
+     then point the IRC client at `localhost:6667`.
+   - `chat.example.org` → `http://localhost:8080` to serve gamja on your own
+     domain through Cloudflare.
 
-[Peer]
-PublicKey = <peer's public key>
-Endpoint = peer.example.org:51820
-AllowedIPs = 10.99.0.0/24
-PersistentKeepalive = 25
-```
-
-- **This node must start the tunnel.** Northflank can't expose a UDP port,
-  so peers can't reach this container first. Every `[Peer]` it should talk
-  to needs an `Endpoint` and `PersistentKeepalive`.
-- If the config is invalid, the container exits with an error rather than
-  running without the mesh.
-- wireproxy only forwards TCP ports. It does not create a network interface,
-  so there's no `cfmesh` device, `ping` from inside, or routing.
-
-To provide the config on Northflank, add it as a **secret file** under the
-service's environment settings (e.g. at `/secrets/cfmesh.conf`) and set
-`CFMESH_CONF=/secrets/cfmesh.conf`. You can also put it on the volume at
-`/data/cfmesh.conf`.
+The routes live in Cloudflare (a remotely managed tunnel), so changing them
+needs no redeploy.
 
 ## Run locally
 
@@ -282,5 +266,4 @@ Then open http://localhost:8080. You can also point a native IRC client at
 [gamja]: https://codeberg.org/emersion/gamja
 [kimchi]: https://codeberg.org/emersion/kimchi
 [soju-containers]: https://codeberg.org/emersion/soju-containers
-[wireproxy]: https://github.com/whyvl/wireproxy
 [config file]: https://codeberg.org/emersion/gamja/src/branch/master/doc/config-file.md
