@@ -1,11 +1,11 @@
 #!/bin/sh
 set -e
 
-# Persistent volume: SQLite DB + uploads. Mount a Northflank volume here.
+# Persistent volume: SQLite DB. Mount a Northflank volume here.
 DATA_DIR="${DATA_DIR:-/data}"
 SOJU_CONF=/etc/soju/config
 
-mkdir -p "$DATA_DIR/uploads" /etc/soju /run/soju
+mkdir -p /etc/soju /run/soju
 
 # With a Cloudflare Tunnel, IRC only listens on loopback: the only way in
 # from outside is through cloudflared.
@@ -14,7 +14,7 @@ if [ -n "$CLOUDFLARED_TOKEN" ]; then
 else
   IRC_LISTEN="irc+insecure://0.0.0.0:6667"
 fi
-chown soju:soju "$DATA_DIR" "$DATA_DIR/uploads" /run/soju
+chown soju:soju "$DATA_DIR" /run/soju
 
 # soju config: use SOJU_CONFIG_FILE as-is if given (e.g. a Northflank secret
 # file), otherwise render one from environment variables.
@@ -28,20 +28,15 @@ else
   # Server name shown to clients (gamja: "Connected to soju"). Without it,
   # soju would use the container hostname, i.e. the Kubernetes pod name.
   SOJU_HOSTNAME="${SOJU_HOSTNAME:-soju}"
-  if [ -z "$SOJU_HTTP_INGRESS" ]; then
-    printf "Warning: SOJU_HTTP_INGRESS is not set, file upload links will be broken\n"
-  fi
   {
     printf "db sqlite3 %s/main.db\n" "$DATA_DIR"
     printf "message-store db\n"
-    printf "file-upload fs %s/uploads/\n" "$DATA_DIR"
     printf "listen %s\n" "$IRC_LISTEN"
     printf "listen http+insecure://127.0.0.1:8081\n"
     printf "listen unix+admin:///run/soju/admin.sock\n"
     # nginx forwards X-Forwarded-For from loopback
     printf "accept-proxy-ip localhost\n"
     printf "hostname %s\n" "$SOJU_HOSTNAME"
-    [ -n "$SOJU_HTTP_INGRESS" ] && printf "http-ingress %s\n" "$SOJU_HTTP_INGRESS"
     [ -n "$SOJU_TITLE" ] && printf "title %s\n" "$SOJU_TITLE"
     [ -n "$SOJU_EXTRA_CONFIG" ] && printf "%s\n" "$SOJU_EXTRA_CONFIG"
     true

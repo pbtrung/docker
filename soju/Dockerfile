@@ -46,7 +46,7 @@ WORKDIR /script
 COPY entrypoint.sh /script/
 COPY nginx.conf /script/nginx.conf
 
-# 8080: nginx (gamja + WebSocket + uploads), public HTTP port on Northflank
+# 8080: nginx (gamja + WebSocket), public HTTP port on Northflank
 # 6667: soju plain IRC, private TCP port (Northflank can't expose TCP publicly)
 EXPOSE 8080 6667/tcp
 

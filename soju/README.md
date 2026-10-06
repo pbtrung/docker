@@ -4,15 +4,16 @@ A single container image that runs:
 
 - [soju] — IRC bouncer (built from `master`)
 - [gamja] — IRC web client (built from `master`)
-- nginx — serves gamja and proxies the IRC WebSocket (`/socket`) and file
-  uploads (`/uploads`) to soju. It replaces [kimchi], which the upstream
-  [soju-containers] repo uses.
+- nginx — serves gamja and proxies the IRC WebSocket (`/socket`) to soju.
+  It replaces [kimchi], which the upstream [soju-containers] repo uses.
+
+File uploads (IRCv3 filehost) are disabled: soju has no `file-upload`
+backend and nginx doesn't proxy `/uploads`.
 
 ```
 browser ──https──▶ Northflank LB ──▶ :8080 nginx ─┬─ /            gamja static files
                    (TLS terminated)               ├─ /config.json  gamja config
                                                   ├─ /socket       ─▶ soju 127.0.0.1:8081 (WebSocket)
-                                                  ├─ /uploads      ─▶ soju 127.0.0.1:8081
                                                   └─ /healthz      200 ok
                                     :6667 soju plain IRC (private, in-project only)
 ```
@@ -21,7 +22,7 @@ Northflank only exposes HTTP ports publicly, so you reach the bouncer through
 gamja in a browser. Port 6667 stays private: other services in the same
 Northflank project can use it, but the internet can't.
 
-Data (SQLite DB and uploaded files) is stored in `/data`, which should be a
+Data (the SQLite DB) is stored in `/data`, which should be a
 Northflank volume.
 
 ## Files
@@ -30,21 +31,20 @@ Northflank volume.
 | --------------- | -------------------------------------------------------------------- |
 | `Dockerfile`    | `builder` stage (alpine:edge) compiles soju + gamja; runtime stage on alpine:edge |
 | `entrypoint.sh` | Writes the soju config from env vars, creates the first admin, starts nginx then soju |
-| `nginx.conf`    | Serves gamja, proxies `/socket` and `/uploads`, `/healthz`, rate limits |
+| `nginx.conf`    | Serves gamja, proxies `/socket`, `/healthz`, rate limits |
 
 ## Environment variables
 
 | Variable              | Default                                       | Description |
 | --------------------- | --------------------------------------------- | ----------- |
 | `SOJU_HOSTNAME`       | `soju`                                        | Server name shown to clients (gamja: "Connected to soju") |
-| `SOJU_HTTP_INGRESS`   | — (**set this**)                              | Public base URL, e.g. `https://p01--soju--abcd1234.code.run`. soju builds upload links from it |
 | `SOJU_TITLE`          | —                                             | Server title shown to clients |
 | `SOJU_ADMIN_USER`     | —                                             | Admin user created on first start (only while `/data/main.db` doesn't exist) |
 | `SOJU_ADMIN_PASSWORD` | —                                             | Password for that admin user |
 | `SOJU_EXTRA_CONFIG`   | —                                             | Extra soju config lines appended as-is (e.g. `max-user-networks 5`) |
 | `SOJU_CONFIG_FILE`    | —                                             | Path to a complete soju config. If set, the env vars above that build the config are ignored |
 | `GAMJA_CONFIG_JSON`   | `{"server":{"auth":"mandatory","ping":30}}`   | gamja [config file] contents, served at `/config.json` |
-| `DATA_DIR`            | `/data`                                       | Where the DB and uploads are stored |
+| `DATA_DIR`            | `/data`                                       | Where the DB is stored |
 | `CLOUDFLARED_TOKEN`   | —                                             | Cloudflare Tunnel token. If set, runs cloudflared and binds IRC to loopback |
 
 Build arguments: `SOJU_REF` and `GAMJA_REF` (default `master`) select the git
@@ -98,9 +98,6 @@ SOJU_ADMIN_PASSWORD=<a strong password>
 SOJU_TITLE=My IRC
 ```
 
-Leave `SOJU_HTTP_INGRESS` empty for now. You'll fill it in after the public
-URL exists (step 8).
-
 Click **Create service**. The first build takes a few minutes, mostly to
 compile soju and bundle gamja.
 
@@ -111,7 +108,7 @@ Without a volume, every redeploy wipes the database and all users.
 Open the service → **Volumes → Add volume**:
 
 - **Name:** `soju-data`
-- **Size:** 1 GB is plenty to start (more if you expect many uploads)
+- **Size:** 1 GB is plenty to start
 - **Mount path:** `/data`
 
 Save. The service restarts with the volume attached. A service with a volume
@@ -130,24 +127,16 @@ Service → **Health checks → Add health check**:
 - **Protocol:** HTTP, **Port:** 8080, **Path:** `/healthz`
 - Type: readiness and/or liveness
 
-### 8. Set the public URL
+### 8. Public URL
 
-Copy the public URL from the service's **Ports / DNS** section, e.g.
-`https://p01--soju--abcd1234.code.run`. Then set this environment variable
-and save. The service restarts.
-
-```
-SOJU_HTTP_INGRESS=https://p01--soju--abcd1234.code.run
-```
-
-Without it, file upload links point to the wrong host. The server name shown
-in gamja ("Connected to soju") comes from `SOJU_HOSTNAME`, which defaults to
-`soju`.
+The public URL is in the service's **Ports / DNS** section, e.g.
+`https://p01--soju--abcd1234.code.run`. The server name shown in gamja
+("Connected to soju") comes from `SOJU_HOSTNAME`, which defaults to `soju`.
 
 **Custom domain (optional):** add it under the service's port **Domains**
 (or the team's **Domains** page). Create the DNS record Northflank shows you
-and wait for it to verify. Then set `SOJU_HTTP_INGRESS` to that domain
-instead (and `SOJU_HOSTNAME` too, if you want it shown as the server name).
+and wait for it to verify. Set `SOJU_HOSTNAME` to it too, if you want it
+shown as the server name.
 
 ### 9. Log in
 
@@ -202,7 +191,7 @@ sojuctl user status
 ### Backups
 
 From the volume's page, take a backup or set up scheduled backups. Everything
-lives in `/data`: `main.db` and `uploads/`.
+lives in `/data/main.db`.
 
 ## Cloudflare Tunnel (optional)
 
@@ -244,7 +233,6 @@ needs no redeploy.
 ```sh
 docker build -t soju soju/
 docker run --rm -p 8080:8080 -p 6667:6667 -v soju-data:/data \
-  -e SOJU_HTTP_INGRESS=http://localhost:8080 \
   -e SOJU_ADMIN_USER=admin -e SOJU_ADMIN_PASSWORD=changeme \
   soju
 ```
