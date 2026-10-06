@@ -2,3 +2,7 @@
 **/*.json
 *.db
 **/*.db
+
+# WireGuard configs (private keys)
+cfmesh.conf
+**/cfmesh.conf
