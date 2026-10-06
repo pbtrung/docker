@@ -8,7 +8,7 @@ RUN apk update && \
     apk --no-cache add build-base git go nodejs npm
 
 RUN git clone --depth 1 --branch "${SOJU_REF}" https://codeberg.org/emersion/soju.git /src/soju && \
-    git clone --depth 1 --branch "${GAMJA_REF}" https://codeberg.org/emersion/gamja.git /src/gamja
+    git clone --depth 1 --branch "${GAMJA_REF}" https://github.com/pbtrung/gamja.git /src/gamja
 
 # cloudflared: official static release binary (no Alpine package)
 RUN mkdir -p /out && \

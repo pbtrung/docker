@@ -3,7 +3,7 @@
 A single container image that runs:
 
 - [soju] — IRC bouncer (built from `master`)
-- [gamja] — IRC web client (built from `master`)
+- [gamja] — IRC web client ([pbtrung/gamja] fork, built from `master`)
 - nginx — serves gamja and proxies the IRC WebSocket (`/socket`) to soju.
   It replaces [kimchi], which the upstream [soju-containers] repo uses.
 
@@ -256,6 +256,7 @@ Then open http://localhost:8080. You can also point a native IRC client at
 
 [soju]: https://soju.im/
 [gamja]: https://codeberg.org/emersion/gamja
+[pbtrung/gamja]: https://github.com/pbtrung/gamja
 [kimchi]: https://codeberg.org/emersion/kimchi
 [soju-containers]: https://codeberg.org/emersion/soju-containers
 [config file]: https://codeberg.org/emersion/gamja/src/branch/master/doc/config-file.md
