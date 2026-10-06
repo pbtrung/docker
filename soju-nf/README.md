@@ -70,8 +70,8 @@ from Git and deploys in one service).
 - **Name:** `soju`
 - **Repository:** this repo, branch `main`
 - **Build type:** `Dockerfile`
-  - **Dockerfile location:** `/soju/Dockerfile`
-  - **Build context:** `/soju`
+  - **Dockerfile location:** `/soju-nf/Dockerfile`
+  - **Build context:** `/soju-nf`
   - (optional) **Build arguments:** `SOJU_REF` / `GAMJA_REF` to pin a tag
     instead of `master`
 - **Resources:** the smallest compute plan is enough. **Instances: 1.**
@@ -231,7 +231,7 @@ needs no redeploy.
 ## Run locally
 
 ```sh
-docker build -t soju soju/
+docker build -t soju soju-nf/
 docker run --rm -p 8080:8080 -p 6667:6667 -v soju-data:/data \
   -e SOJU_ADMIN_USER=admin -e SOJU_ADMIN_PASSWORD=changeme \
   soju
