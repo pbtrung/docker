@@ -1,0 +1,21 @@
+#!/bin/sh
+# Send a command to the running WeeChat through its FIFO pipe.
+# Usage: weechat-cmd '/server add libera irc.libera.chat/6697'
+#        weechat-cmd 'irc.libera.#weechat' 'hello'   (text to a buffer)
+set -e
+
+FIFO="${WEECHAT_HOME:-/data/weechat}/weechat_fifo"
+
+if [ ! -p "$FIFO" ]; then
+  printf "FIFO %s not found, is WeeChat running?\n" "$FIFO" >&2
+  exit 1
+fi
+
+if [ $# -eq 2 ]; then
+  printf "%s *%s\n" "$1" "$2" >"$FIFO"
+elif [ $# -eq 1 ]; then
+  printf "*%s\n" "$1" >"$FIFO"
+else
+  printf "usage: weechat-cmd [buffer] <command-or-text>\n" >&2
+  exit 2
+fi
