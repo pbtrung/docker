@@ -58,15 +58,22 @@ if [ ! -f "$WEECHAT_HOME/weechat.conf" ]; then
   add_cmd '/set fifo.file.path "${raw:${weechat_runtime_dir}/weechat_fifo}"'
 fi
 
-# Relay settings, enforced on every start: loopback only (nginx proxies
-# /weechat to it), password and optional TOTP from the environment.
+# Relay settings, enforced on every start: "api" protocol (the one the
+# pbtrung/glowing-bear fork speaks) on loopback only (nginx proxies /api to
+# it), password from the environment. No TOTP: browsers can't send it on the
+# WebSocket connection, so a TOTP secret would lock Glowing Bear out.
 add_cmd '/set relay.network.bind_address "127.0.0.1"'
 add_cmd '/set relay.network.ipv6 off'
 # shellcheck disable=SC2016 # ${...} is WeeChat syntax, not shell
 add_cmd '/set relay.network.password "${raw:${env:WEECHAT_RELAY_PASSWORD}}"'
-# shellcheck disable=SC2016 # ${...} is WeeChat syntax, not shell
-add_cmd '/set relay.network.totp_secret "${raw:${env:WEECHAT_RELAY_TOTP_SECRET}}"'
-add_cmd '/set relay.port.weechat 9001'
+add_cmd '/set relay.network.totp_secret ""'
+# PBKDF2 rounds for hashed passwords: 1000 instead of the default 100000, so
+# logging in is fast on phones
+add_cmd '/set relay.network.password_hash_iterations 1000'
+# free port 9001 from the "weechat" protocol relay of older versions of this
+# image
+add_cmd '/mute /relay del weechat'
+add_cmd '/set relay.port.api 9001'
 [ -n "$WEECHAT_EXTRA_COMMANDS" ] && add_cmd "$WEECHAT_EXTRA_COMMANDS"
 add_cmd '/save'
 

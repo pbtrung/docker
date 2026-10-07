@@ -4,20 +4,21 @@ A single container image that runs:
 
 - [WeeChat] — IRC client, headless (`weechat-headless`), from Alpine edge
   with the Perl, Python and Lua script plugins
-- [Glowing Bear] — WeeChat web client (built from `master`)
-- nginx — serves Glowing Bear and proxies the relay WebSocket (`/weechat`) to
-  WeeChat's relay
+- [Glowing Bear] — WeeChat web client ([pbtrung/glowing-bear] fork, built
+  from `master`)
+- nginx — serves Glowing Bear and proxies the relay API (`/api`, HTTP and
+  WebSocket) to WeeChat's relay
 
 ```
 browser ──https──▶ Northflank LB ──▶ :8080 nginx ─┬─ /          Glowing Bear static files
-                   (TLS terminated)               ├─ /weechat   ─▶ WeeChat relay 127.0.0.1:9001 (WebSocket)
+                   (TLS terminated)               ├─ /api       ─▶ WeeChat relay 127.0.0.1:9001 (HTTP + WebSocket)
                                                   └─ /healthz   200 ok
                                     WeeChat ──▶ IRC networks (outbound only)
 ```
 
 WeeChat stays connected to your IRC networks around the clock. Glowing Bear
-in the browser is the UI. It talks to WeeChat's relay over the WeeChat relay
-protocol, through nginx. The relay only listens on loopback, so nginx is the
+in the browser is the UI. It talks to WeeChat's relay over the `api` relay
+protocol (WeeChat 4.1+), through nginx. The relay only listens on loopback, so nginx is the
 only way in.
 
 Everything WeeChat writes is stored in `/data/weechat`: config, chat logs and
@@ -29,7 +30,7 @@ scripts. `/data` should be a Northflank volume.
 | --------------- | ------- |
 | `Dockerfile`    | `builder` stage (alpine:edge) builds Glowing Bear and fetches cloudflared; runtime stage on alpine:edge with WeeChat from apk |
 | `entrypoint.sh` | Applies WeeChat settings, starts cloudflared (optional) and nginx, then runs WeeChat as PID 1 |
-| `nginx.conf`    | Serves Glowing Bear, proxies `/weechat`, `/healthz`, rate limits |
+| `nginx.conf`    | Serves Glowing Bear, proxies `/api`, `/healthz`, rate limits |
 | `weechat-cmd`   | Shell helper that sends a command to the running WeeChat through its FIFO |
 
 ## How WeeChat runs
@@ -79,12 +80,18 @@ Chat logs live in `/data/weechat/logs`.
 | `relay.network.bind_address` | `127.0.0.1` |
 | `relay.network.ipv6` | `off` |
 | `relay.network.password` | `${env:WEECHAT_RELAY_PASSWORD}` |
-| `relay.network.totp_secret` | `${env:WEECHAT_RELAY_TOTP_SECRET}` |
-| `relay.port.weechat` | `9001` |
+| `relay.network.totp_secret` | `""` |
+| `relay.network.password_hash_iterations` | `1000` (PBKDF2 rounds; default 100000, slow on phones) |
+| `relay.port.api` | `9001` |
 
-The password and TOTP secret are stored as `${env:…}` references, never as
-plain values. WeeChat reads them from the environment each time a client logs
-in. Changing the env var and restarting changes the password.
+The password is stored as an `${env:…}` reference, never as a plain value.
+WeeChat reads it from the environment each time a client logs in. Changing
+the env var and restarting changes the password.
+
+TOTP is forced off: the fork can't send a one-time code on the WebSocket
+connection, so a TOTP secret would lock Glowing Bear out. A `weechat`
+protocol relay left on port 9001 by an older version of this image is
+removed.
 
 Then it runs `WEECHAT_EXTRA_COMMANDS` (if set) and `/save`.
 
@@ -96,7 +103,6 @@ Bear to browse them.
 | Variable                     | Default         | Description |
 | ---------------------------- | --------------- | ----------- |
 | `WEECHAT_RELAY_PASSWORD`     | — (**required**) | Password Glowing Bear uses to log in to the relay. The container won't start without it |
-| `WEECHAT_RELAY_TOTP_SECRET`  | —               | Base32 TOTP secret. If set, Glowing Bear also asks for a one-time code |
 | `WEECHAT_EXTRA_COMMANDS`     | —               | WeeChat commands run on every start, separated by `;` (e.g. `/set weechat.look.buffer_time_format "%H:%M"`) |
 | `DATA_DIR`                   | `/data`         | Persistent volume mount point |
 | `WEECHAT_HOME`               | `$DATA_DIR/weechat` | WeeChat home directory (config, logs, scripts, FIFO) |
@@ -149,7 +155,7 @@ Under **Environment variables** (runtime), add as **secrets**:
 
 ```
 WEECHAT_RELAY_PASSWORD=<a long random password>
-TZ=Asia/Ho_Chi_Minh
+TZ=America/Los_Angeles
 ```
 
 Generate a password with e.g. `openssl rand -base64 24`. The relay is
@@ -181,15 +187,15 @@ Service → **Health checks → Add health check**:
 ### 8. Connect with Glowing Bear
 
 Open the public URL from the service's **Ports / DNS** section, e.g.
-`https://p01--weechat--abcd1234.code.run`. On the Glowing Bear start page:
+`https://p01--weechat--abcd1234.code.run`. On the Glowing Bear login page:
 
-- **WeeChat relay hostname and port number:**
-  `p01--weechat--abcd1234.code.run:443` (path defaults to `weechat`)
-- **WeeChat relay password:** `WEECHAT_RELAY_PASSWORD`
-- **Encryption (TLS):** checked
-- optionally **Automatically connect** and **Save password**
+- **Host:** `p01--weechat--abcd1234.code.run` (the path defaults to `api`)
+- **Port:** `443`
+- **Password:** `WEECHAT_RELAY_PASSWORD`
+- **TLS:** on (the default when the page is loaded over https)
 
-Click **Connect**.
+Click **Connect**. To prefill the form, bookmark
+`https://<host>/#host=<host>&port=443&autoconnect=true`.
 
 **Custom domain (optional):** add it under the service's port **Domains**,
 create the DNS record Northflank shows you, then use that hostname in
@@ -292,18 +298,18 @@ docker run --rm -p 8080:8080 -v weechat-data:/data \
   weechat
 ```
 
-Then open http://localhost:8080 and connect to `localhost:8080`, password
-`changeme`, **TLS unchecked**.
+Then open http://localhost:8080 and connect to host `localhost`, port `8080`,
+password `changeme`, **TLS off**.
 
 ## Notes
 
-- **Other relay clients** that speak the `weechat` relay protocol over
-  WebSocket (e.g. WeeChat Android) connect the same way: host `<host>`,
-  port 443, TLS, WebSocket path `/weechat`. The relay's own TCP port is
+- **Other relay clients** must speak the `api` relay protocol, e.g. WeeChat
+  itself with `/remote add <name> https://<host>:443 -password=<password>`.
+  Clients that only speak the older `weechat` protocol (upstream Glowing
+  Bear, WeeChat Android) can't connect. The relay's own TCP port is
   loopback-only.
-- nginx allows 10 relay connection attempts per minute per client IP (burst
-  5) to slow down password guessing. Add `WEECHAT_RELAY_TOTP_SECRET` for a
-  second factor.
+- nginx allows 20 relay requests per minute per client IP (burst 10) to slow
+  down password guessing. One Glowing Bear login takes 2–3 requests.
 - Glowing Bear stores its settings (and the password, if you tick **Save
   password**) in the browser's local storage.
 - `WEECHAT_EXTRA_COMMANDS` runs on every start, so a setting it changes can't
@@ -313,4 +319,5 @@ Then open http://localhost:8080 and connect to `localhost:8080`, password
 [WeeChat]: https://weechat.org/
 [WeeChat user's guide]: https://weechat.org/doc/
 [Glowing Bear]: https://github.com/glowing-bear/glowing-bear
+[pbtrung/glowing-bear]: https://github.com/pbtrung/glowing-bear
 [WeeChat privacy gist]: https://gist.github.com/atoponce/f19666d6b206a10b411b97381a1861a1

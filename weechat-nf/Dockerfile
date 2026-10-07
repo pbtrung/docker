@@ -6,7 +6,7 @@ RUN apk update && \
     apk --no-cache upgrade && \
     apk --no-cache add git nodejs npm
 
-RUN git clone --depth 1 --branch "${GLOWING_BEAR_REF}" https://github.com/glowing-bear/glowing-bear.git /src/glowing-bear
+RUN git clone --depth 1 --branch "${GLOWING_BEAR_REF}" https://github.com/pbtrung/glowing-bear.git /src/glowing-bear
 
 # cloudflared: official static release binary (no Alpine package)
 RUN mkdir -p /out && \
