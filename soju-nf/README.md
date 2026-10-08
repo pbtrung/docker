@@ -273,8 +273,13 @@ Then open http://localhost:8080. You can also point a native IRC client at
   `wss://<host>/socket`.
 - gamja sends `PING` every 30 s by default (`GAMJA_CONFIG_JSON`). This keeps
   idle WebSockets from being cut by load balancer timeouts.
-- nginx forwards client IPs via `X-Forwarded-For`. soju trusts it from
-  loopback (`accept-proxy-ip localhost`).
+- nginx recovers the client IP from the `X-Forwarded-For` set by cloudflared
+  or the Northflank load balancer (`real_ip_*`), so rate limits apply per
+  client, and forwards it to soju as a single address. soju trusts it from
+  loopback (`accept-proxy-ip localhost`). Don't forward the whole
+  `client, proxy` list: soju uses the header as-is for the client host, and
+  the space in it breaks the IRC prefixes it sends (gamja then misses its own
+  JOINs after a reload).
 - soju follows the Alpine edge package, so each rebuild picks up whatever
   version edge ships.
 
