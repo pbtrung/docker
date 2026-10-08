@@ -2,7 +2,7 @@
 
 A single container image that runs:
 
-- [soju] — IRC bouncer (built from `master`)
+- [soju] — IRC bouncer (Alpine edge `soju` package)
 - [gamja] — IRC web client ([pbtrung/gamja] fork, built from `master`)
 - nginx — serves gamja and proxies the IRC WebSocket (`/socket`) to soju.
   It replaces [kimchi], which the upstream [soju-containers] repo uses.
@@ -29,7 +29,7 @@ Northflank volume.
 
 | File            | Purpose                                                              |
 | --------------- | -------------------------------------------------------------------- |
-| `Dockerfile`    | `builder` stage (alpine:edge) compiles soju + gamja; runtime stage on alpine:edge |
+| `Dockerfile`    | `builder` stage (alpine:edge) builds gamja; runtime stage on alpine:edge installs soju with `apk` |
 | `entrypoint.sh` | Writes the soju config from env vars, creates the first admin, starts nginx then soju |
 | `nginx.conf`    | Serves gamja, proxies `/socket`, `/healthz`, rate limits |
 
@@ -47,8 +47,8 @@ Northflank volume.
 | `DATA_DIR`            | `/data`                                       | Where the DB is stored |
 | `CLOUDFLARED_TOKEN`   | —                                             | Cloudflare Tunnel token. If set, runs cloudflared and binds IRC to loopback |
 
-Build arguments: `SOJU_REF` and `GAMJA_REF` (default `master`) select the git
-branch or tag to build, e.g. `v0.11.1`.
+Build argument: `GAMJA_REF` (default `master`) selects the gamja git branch
+or tag to build. soju comes from the Alpine edge package.
 
 ## Deploy on Northflank (web UI)
 
@@ -72,7 +72,7 @@ from Git and deploys in one service).
 - **Build type:** `Dockerfile`
   - **Dockerfile location:** `/soju-nf/Dockerfile`
   - **Build context:** `/soju-nf`
-  - (optional) **Build arguments:** `SOJU_REF` / `GAMJA_REF` to pin a tag
+  - (optional) **Build arguments:** `GAMJA_REF` to pin a gamja tag
     instead of `master`
 - **Resources:** the smallest compute plan is enough. **Instances: 1.**
 
@@ -183,8 +183,9 @@ sojuctl user status
 ### Updating
 
 - Pushing to `main` triggers a rebuild and redeploy automatically.
-- To pick up new soju/gamja `master` commits without changing this repo,
-  start a new build manually from the service's **Builds** tab.
+- To pick up a new soju package from Alpine edge or new gamja `master`
+  commits without changing this repo, start a new build manually from the
+  service's **Builds** tab.
 - The database lives on the volume, so it survives redeploys. soju migrates
   its schema itself on startup.
 
@@ -250,9 +251,9 @@ Then open http://localhost:8080. You can also point a native IRC client at
   idle WebSockets from being cut by load balancer timeouts.
 - nginx forwards client IPs via `X-Forwarded-For`. soju trusts it from
   loopback (`accept-proxy-ip localhost`).
-- Building from `master` gives you the newest features, but `master` may be
-  unstable. Set `SOJU_REF` / `GAMJA_REF` build arguments to a release tag for
-  a stable deploy.
+- soju follows the Alpine edge package, so each rebuild picks up whatever
+  version edge ships. gamja is built from `master`, which may be unstable;
+  set the `GAMJA_REF` build argument to a release tag for a stable deploy.
 
 [soju]: https://soju.im/
 [gamja]: https://codeberg.org/emersion/gamja

@@ -33,7 +33,7 @@ else
     printf "message-store db\n"
     printf "listen %s\n" "$IRC_LISTEN"
     printf "listen http+insecure://127.0.0.1:8081\n"
-    printf "listen unix+admin:///run/soju/admin.sock\n"
+    printf "listen unix+admin:///run/soju/admin\n"
     # nginx forwards X-Forwarded-For from loopback
     printf "accept-proxy-ip localhost\n"
     printf "hostname %s\n" "$SOJU_HOSTNAME"

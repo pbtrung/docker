@@ -1,29 +1,18 @@
 FROM alpine:edge AS builder
 
-ARG SOJU_REF=master
 ARG GAMJA_REF=master
 
 RUN apk update && \
     apk --no-cache upgrade && \
-    apk --no-cache add build-base git go nodejs npm
+    apk --no-cache add git nodejs npm
 
-RUN git clone --depth 1 --branch "${SOJU_REF}" https://codeberg.org/emersion/soju.git /src/soju && \
-    git clone --depth 1 --branch "${GAMJA_REF}" https://github.com/pbtrung/gamja.git /src/gamja
+RUN git clone --depth 1 --branch "${GAMJA_REF}" https://github.com/pbtrung/gamja.git /src/gamja
 
 # cloudflared: official static release binary (no Alpine package)
 RUN mkdir -p /out && \
     wget -q -O /out/cloudflared \
       https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 && \
     chmod +x /out/cloudflared
-
-# soju: static binaries with config/admin-socket paths baked in so that
-# `sojuctl` / `sojudb` work without flags inside the container shell
-WORKDIR /src/soju
-RUN go build -o /out/ \
-      -ldflags "-linkmode=external -extldflags=-static \
-        -X codeberg.org/emersion/soju/config.DefaultPath=/etc/soju/config \
-        -X codeberg.org/emersion/soju/config.DefaultUnixAdminPath=/run/soju/admin.sock" \
-      ./cmd/soju ./cmd/sojudb ./cmd/sojuctl
 
 # gamja: static web client
 WORKDIR /src/gamja
@@ -32,14 +21,19 @@ RUN npm install --include=dev && \
 
 FROM alpine:edge
 
-RUN apk update && \
-    apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata mailcap nginx su-exec
-
+# Create the soju user (uid 1000) before installing the package, so the
+# package's install script reuses it instead of adding a system user.
 RUN addgroup -g 1000 soju && \
     adduser -u 1000 -G soju -D soju
 
-COPY --from=builder /out/soju /out/sojudb /out/sojuctl /out/cloudflared /usr/local/bin/
+# soju from the Alpine package: its sojuctl/sojudb default to
+# /etc/soju/config and the admin socket /run/soju/admin, so they work
+# without flags inside the container shell
+RUN apk update && \
+    apk --no-cache upgrade && \
+    apk --no-cache add ca-certificates tzdata mailcap nginx su-exec soju
+
+COPY --from=builder /out/cloudflared /usr/local/bin/
 COPY --from=builder /src/gamja/dist /usr/share/gamja
 
 WORKDIR /script
