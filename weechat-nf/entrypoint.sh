@@ -16,6 +16,21 @@ fi
 mkdir -p "$WEECHAT_HOME"
 chown weechat:weechat "$DATA_DIR" "$WEECHAT_HOME"
 
+# Glowing Bear lives on the volume so it can be updated without a new image:
+# run $DATA_DIR/update-glowing-bear.sh from a shell. Seed it from the release
+# baked into the image on the first start; nginx serves it through the
+# /usr/share/glowing-bear symlink.
+GLOWING_BEAR_DIR="$DATA_DIR/glowing-bear"
+if [ ! -f "$GLOWING_BEAR_DIR/index.html" ]; then
+  printf "Installing bundled Glowing Bear %s in %s\n" \
+    "$(cat /usr/share/glowing-bear-dist/.version)" "$GLOWING_BEAR_DIR"
+  rm -rf "$GLOWING_BEAR_DIR"
+  cp -a /usr/share/glowing-bear-dist "$GLOWING_BEAR_DIR"
+fi
+ln -sfn "$GLOWING_BEAR_DIR" /usr/share/glowing-bear
+cp /usr/local/bin/update-glowing-bear.sh "$DATA_DIR/update-glowing-bear.sh"
+chmod +x "$DATA_DIR/update-glowing-bear.sh"
+
 # WeeChat commands run after startup (-r). They are evaluated, so the
 # ${raw:...} wrappers store the ${env:...} references in relay.conf instead of
 # the secrets themselves: WeeChat reads them from the environment whenever a

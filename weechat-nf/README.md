@@ -4,8 +4,9 @@ A single container image that runs:
 
 - [WeeChat] — IRC client, headless (`weechat-headless`), from Alpine edge
   with the Perl, Python and Lua script plugins
-- [Glowing Bear] — WeeChat web client ([pbtrung/glowing-bear] fork, built
-  from `master`)
+- [Glowing Bear] — WeeChat web client, prebuilt release from the
+  [pbtrung/glowing-bear] fork, kept on the volume so it can be updated from a
+  shell
 - nginx — serves Glowing Bear and proxies the relay API (`/api`, HTTP and
   WebSocket) to WeeChat's relay
 
@@ -22,14 +23,16 @@ protocol (WeeChat 4.1+), through nginx. The relay only listens on loopback, so n
 only way in.
 
 Everything WeeChat writes is stored in `/data/weechat`: config, chat logs and
-scripts. `/data` should be a Northflank volume.
+scripts. Glowing Bear is in `/data/glowing-bear`. `/data` should be a
+Northflank volume.
 
 ## Files
 
 | File            | Purpose |
 | --------------- | ------- |
-| `Dockerfile`    | `builder` stage (alpine:edge) builds Glowing Bear and fetches cloudflared; runtime stage on alpine:edge with WeeChat from apk |
-| `entrypoint.sh` | Applies WeeChat settings, starts cloudflared (optional) and nginx, then runs WeeChat as PID 1 |
+| `Dockerfile`    | `builder` stage (alpine:edge) downloads a Glowing Bear release and cloudflared; runtime stage on alpine:edge with WeeChat from apk |
+| `entrypoint.sh` | Installs Glowing Bear on the volume, applies WeeChat settings, starts cloudflared (optional) and nginx, then runs WeeChat as PID 1 |
+| `update-glowing-bear.sh` | Installs a Glowing Bear release (latest, or a given tag) into `/data/glowing-bear` |
 | `nginx.conf`    | Serves Glowing Bear, proxies `/api`, `/healthz`, rate limits |
 | `weechat-cmd`   | Shell helper that sends a command to the running WeeChat through its FIFO |
 
@@ -109,8 +112,9 @@ Bear to browse them.
 | `CLOUDFLARED_TOKEN`          | —               | Cloudflare Tunnel token. If set, runs cloudflared |
 | `TZ`                         | UTC             | Time zone for timestamps and log files, e.g. `Asia/Ho_Chi_Minh` |
 
-Build argument: `GLOWING_BEAR_REF` (default `master`) selects the Glowing
-Bear git branch or tag to build.
+Build argument: `GLOWING_BEAR_REF` (default `latest`) selects the Glowing
+Bear release tag bundled in the image. It's only installed on a volume that
+doesn't have Glowing Bear yet.
 
 ## Deploy on Northflank (web UI)
 
@@ -135,7 +139,7 @@ from Git and deploys in one service).
 - **Build type:** `Dockerfile`
   - **Dockerfile location:** `/weechat-nf/Dockerfile`
   - **Build context:** `/weechat-nf`
-  - (optional) **Build arguments:** `GLOWING_BEAR_REF` to pin a tag
+  - (optional) **Build arguments:** `GLOWING_BEAR_REF` to pin a release tag
 - **Resources:** the smallest compute plan is enough. **Instances: 1.**
 
 ### 4. Networking
@@ -161,8 +165,7 @@ TZ=America/Los_Angeles
 Generate a password with e.g. `openssl rand -base64 24`. The relay is
 reachable from the internet, so make it long.
 
-Click **Create service**. The first build takes a few minutes, mostly to
-bundle Glowing Bear.
+Click **Create service**. The build takes a minute or two.
 
 ### 6. Add a persistent volume
 
@@ -233,14 +236,17 @@ Scripts are installed into `/data/weechat`, so they survive redeploys.
 ### Updating
 
 - Pushing to `main` triggers a rebuild and redeploy automatically.
-- To pick up new WeeChat, Alpine or Glowing Bear versions without changing
-  this repo, start a new build manually from the service's **Builds** tab.
+- To pick up new WeeChat or Alpine versions without changing this repo,
+  start a new build manually from the service's **Builds** tab.
+- Glowing Bear is updated from a shell instead (see
+  [Updating Glowing Bear](#updating-glowing-bear)). A new image doesn't
+  replace the copy on the volume.
 - Config and logs live on the volume and survive redeploys.
 
 ### Backups
 
 From the volume's page, take a backup or set up scheduled backups.
-Everything lives in `/data/weechat`.
+Everything lives in `/data`.
 
 ## Shell access
 
@@ -259,6 +265,25 @@ weechat-cmd 'irc.libera.#weechat' 'hello from the shell'
 The output goes to WeeChat's buffers (visible in Glowing Bear), not the
 shell. Config files are in `/data/weechat/*.conf`. Edit them only while
 WeeChat is stopped, or run `weechat-cmd '/reload'` afterwards.
+
+## Updating Glowing Bear
+
+Glowing Bear is served from `/data/glowing-bear`. On the first start the
+entrypoint copies the release bundled in the image there, and on every start
+it copies `update-glowing-bear.sh` to `/data`. To switch to another release of
+[pbtrung/glowing-bear] without a new image, open a shell on the container and
+run:
+
+```sh
+/data/update-glowing-bear.sh           # latest release
+/data/update-glowing-bear.sh v0.999.0  # a specific release tag
+FORCE=1 /data/update-glowing-bear.sh   # reinstall even if already installed
+```
+
+It downloads the release's `.zip` asset, unpacks it next to the current copy
+and swaps the two directories, so nginx never serves a half-installed tree.
+The installed tag is in `/data/glowing-bear/.version`. Reload Glowing Bear in
+the browser afterwards. No restart is needed.
 
 ## Cloudflare Tunnel (optional)
 
