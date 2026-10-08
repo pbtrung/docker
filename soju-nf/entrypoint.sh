@@ -16,6 +16,21 @@ else
 fi
 chown soju:soju "$DATA_DIR" /run/soju
 
+# gamja lives on the volume so it can be updated without a new image: run
+# $DATA_DIR/update-gamja.sh from a shell. Seed it from the release baked into
+# the image on the first start; nginx serves it through the /usr/share/gamja
+# symlink.
+GAMJA_DIR="$DATA_DIR/gamja"
+if [ ! -f "$GAMJA_DIR/index.html" ]; then
+  printf "Installing bundled gamja %s in %s\n" \
+    "$(cat /usr/share/gamja-dist/.version)" "$GAMJA_DIR"
+  rm -rf "$GAMJA_DIR"
+  cp -a /usr/share/gamja-dist "$GAMJA_DIR"
+fi
+ln -sfn "$GAMJA_DIR" /usr/share/gamja
+cp /usr/local/bin/update-gamja.sh "$DATA_DIR/update-gamja.sh"
+chmod +x "$DATA_DIR/update-gamja.sh"
+
 # soju config: use SOJU_CONFIG_FILE as-is if given (e.g. a Northflank secret
 # file), otherwise render one from environment variables.
 if [ -n "$SOJU_CONFIG_FILE" ]; then

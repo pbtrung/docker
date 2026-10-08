@@ -3,7 +3,8 @@
 A single container image that runs:
 
 - [soju] — IRC bouncer (Alpine edge `soju` package)
-- [gamja] — IRC web client ([pbtrung/gamja] fork, built from `master`)
+- [gamja] — IRC web client, prebuilt release from the [pbtrung/gamja] fork,
+  kept on the volume so it can be updated from a shell
 - nginx — serves gamja and proxies the IRC WebSocket (`/socket`) to soju.
   It replaces [kimchi], which the upstream [soju-containers] repo uses.
 
@@ -22,15 +23,16 @@ Northflank only exposes HTTP ports publicly, so you reach the bouncer through
 gamja in a browser. Port 6667 stays private: other services in the same
 Northflank project can use it, but the internet can't.
 
-Data (the SQLite DB) is stored in `/data`, which should be a
-Northflank volume.
+Data (the SQLite DB) is stored in `/data`, and gamja in `/data/gamja`.
+`/data` should be a Northflank volume.
 
 ## Files
 
 | File            | Purpose                                                              |
 | --------------- | -------------------------------------------------------------------- |
-| `Dockerfile`    | `builder` stage (alpine:edge) builds gamja; runtime stage on alpine:edge installs soju with `apk` |
-| `entrypoint.sh` | Writes the soju config from env vars, creates the first admin, starts nginx then soju |
+| `Dockerfile`    | `builder` stage (alpine:edge) downloads a gamja release and cloudflared; runtime stage on alpine:edge installs soju with `apk` |
+| `entrypoint.sh` | Installs gamja on the volume, writes the soju config from env vars, creates the first admin, starts nginx then soju |
+| `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `/data/gamja` |
 | `nginx.conf`    | Serves gamja, proxies `/socket`, `/healthz`, rate limits |
 
 ## Environment variables
@@ -47,8 +49,9 @@ Northflank volume.
 | `DATA_DIR`            | `/data`                                       | Where the DB is stored |
 | `CLOUDFLARED_TOKEN`   | —                                             | Cloudflare Tunnel token. If set, runs cloudflared and binds IRC to loopback |
 
-Build argument: `GAMJA_REF` (default `master`) selects the gamja git branch
-or tag to build. soju comes from the Alpine edge package.
+Build argument: `GAMJA_REF` (default `latest`) selects the gamja release tag
+bundled in the image. It's only installed on a volume that doesn't have gamja
+yet. soju comes from the Alpine edge package.
 
 ## Deploy on Northflank (web UI)
 
@@ -72,8 +75,8 @@ from Git and deploys in one service).
 - **Build type:** `Dockerfile`
   - **Dockerfile location:** `/soju-nf/Dockerfile`
   - **Build context:** `/soju-nf`
-  - (optional) **Build arguments:** `GAMJA_REF` to pin a gamja tag
-    instead of `master`
+  - (optional) **Build arguments:** `GAMJA_REF` to pin a gamja release
+    tag instead of the latest
 - **Resources:** the smallest compute plan is enough. **Instances: 1.**
 
 ### 4. Networking
@@ -98,8 +101,8 @@ SOJU_ADMIN_PASSWORD=<a strong password>
 SOJU_TITLE=My IRC
 ```
 
-Click **Create service**. The first build takes a few minutes, mostly to
-compile soju and bundle gamja.
+Click **Create service**. The build only installs packages and downloads
+releases, so it takes about a minute.
 
 ### 6. Add a persistent volume
 
@@ -183,16 +186,37 @@ sojuctl user status
 ### Updating
 
 - Pushing to `main` triggers a rebuild and redeploy automatically.
-- To pick up a new soju package from Alpine edge or new gamja `master`
-  commits without changing this repo, start a new build manually from the
-  service's **Builds** tab.
+- To pick up a new soju package from Alpine edge without changing this
+  repo, start a new build manually from the service's **Builds** tab.
+- gamja is updated from a shell instead (see
+  [Updating gamja](#updating-gamja)). A new image doesn't replace the copy
+  on the volume.
 - The database lives on the volume, so it survives redeploys. soju migrates
   its schema itself on startup.
 
 ### Backups
 
-From the volume's page, take a backup or set up scheduled backups. Everything
+From the volume's page, take a backup or set up scheduled backups. The data
 lives in `/data/main.db`.
+
+## Updating gamja
+
+gamja is served from `/data/gamja`. On the first start the entrypoint copies
+the release bundled in the image there, and on every start it copies
+`update-gamja.sh` to `/data`. To switch to another release of
+[pbtrung/gamja] without a new image, open a shell on the container and run:
+
+```sh
+/data/update-gamja.sh           # latest release
+/data/update-gamja.sh v0.999.0  # a specific release tag
+FORCE=1 /data/update-gamja.sh   # reinstall even if already installed
+```
+
+It downloads the release's `.zip` asset (gamja's `dist/`, with `index.html`
+at the root or in one top-level folder), unpacks it next to the current copy and
+swaps the two directories, so nginx never serves a half-installed tree. The
+installed tag is in `/data/gamja/.version`. Reload gamja in the browser
+afterwards. No restart is needed.
 
 ## Cloudflare Tunnel (optional)
 
@@ -252,8 +276,7 @@ Then open http://localhost:8080. You can also point a native IRC client at
 - nginx forwards client IPs via `X-Forwarded-For`. soju trusts it from
   loopback (`accept-proxy-ip localhost`).
 - soju follows the Alpine edge package, so each rebuild picks up whatever
-  version edge ships. gamja is built from `master`, which may be unstable;
-  set the `GAMJA_REF` build argument to a release tag for a stable deploy.
+  version edge ships.
 
 [soju]: https://soju.im/
 [gamja]: https://codeberg.org/emersion/gamja

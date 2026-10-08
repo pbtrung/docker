@@ -1,12 +1,9 @@
 FROM alpine:edge AS builder
 
-ARG GAMJA_REF=master
+ARG GAMJA_REF=latest
 
 RUN apk update && \
-    apk --no-cache upgrade && \
-    apk --no-cache add git nodejs npm
-
-RUN git clone --depth 1 --branch "${GAMJA_REF}" https://github.com/pbtrung/gamja.git /src/gamja
+    apk --no-cache upgrade
 
 # cloudflared: official static release binary (no Alpine package)
 RUN mkdir -p /out && \
@@ -14,10 +11,10 @@ RUN mkdir -p /out && \
       https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 && \
     chmod +x /out/cloudflared
 
-# gamja: static web client
-WORKDIR /src/gamja
-RUN npm install --include=dev && \
-    npm run build
+# gamja: prebuilt release from pbtrung/gamja, seeded into /data/gamja on
+# first start
+COPY update-gamja.sh /usr/local/bin/
+RUN GAMJA_DIR=/out/gamja update-gamja.sh "${GAMJA_REF}"
 
 FROM alpine:edge
 
@@ -34,11 +31,12 @@ RUN apk update && \
     apk --no-cache add ca-certificates tzdata mailcap nginx su-exec soju
 
 COPY --from=builder /out/cloudflared /usr/local/bin/
-COPY --from=builder /src/gamja/dist /usr/share/gamja
+COPY --from=builder /out/gamja /usr/share/gamja-dist
 
 WORKDIR /script
 COPY entrypoint.sh /script/
 COPY nginx.conf /script/nginx.conf
+COPY update-gamja.sh /usr/local/bin/update-gamja.sh
 
 # 8080: nginx (gamja + WebSocket), public HTTP port on Northflank
 # 6667: soju plain IRC, private TCP port (Northflank can't expose TCP publicly)
