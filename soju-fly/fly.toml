@@ -1,0 +1,36 @@
+app = 'soju-ndq0bn8tgjuyd'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+# soju DB, gamja and the Cloudflare Mesh registration
+[mounts]
+  source = 'soju_data'
+  destination = '/data'
+  initial_size = '1gb'
+
+# No public service: gamja (8080) and IRC (6667) are only reachable over
+# Cloudflare Mesh and Fly's private network. Without a service the Fly
+# proxy never stops or starts the machine, so it stays the only one and
+# always runs (deploy with --ha=false so the first deploy creates one, not
+# two).
+
+# Health check run by Fly on the machine itself
+[checks]
+  [checks.nginx]
+    type = 'http'
+    port = 8080
+    method = 'GET'
+    path = '/healthz'
+    grace_period = '15s'
+    interval = '30s'
+    timeout = '5s'
+
+# Restart the machine whenever soju (or the entrypoint) exits
+[[restart]]
+  policy = 'always'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '256mb'
