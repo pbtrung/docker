@@ -6,7 +6,7 @@
 set -e
 
 REPO="pbtrung/gamja"
-DEST="${GAMJA_DIR:-${DATA_DIR:-/data}/gamja}"
+DEST="${GAMJA_DATA_DIR:-/data/gamja}"
 TAG="${1:-latest}"
 
 if [ "$TAG" = "latest" ]; then

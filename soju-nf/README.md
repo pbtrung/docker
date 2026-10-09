@@ -23,8 +23,17 @@ Northflank only exposes HTTP ports publicly, so you reach the bouncer through
 gamja in a browser. Port 6667 stays private: other services in the same
 Northflank project can use it, but the internet can't.
 
-Data (the SQLite DB) is stored in `/data`, and gamja in `/data/gamja`.
-`/data` should be a Northflank volume.
+`/data` should be a Northflank volume. It holds:
+
+```
+/data/
+├── soju/main.db      SQLite DB (SOJU_DATA_DIR)
+├── gamja/            gamja web client (GAMJA_DATA_DIR)
+└── update-gamja.sh   gamja updater, copied on every start
+```
+
+On every start, `SOJU_DATA_DIR` is recursively chowned to the `soju` user and
+made private to it (`u+rwX,go-rwx`), so a DB copied in as root still works.
 
 ## Files
 
@@ -32,7 +41,7 @@ Data (the SQLite DB) is stored in `/data`, and gamja in `/data/gamja`.
 | --------------- | -------------------------------------------------------------------- |
 | `Dockerfile`    | `builder` stage (alpine:edge) downloads a gamja release and cloudflared; runtime stage on alpine:edge installs soju with `apk` |
 | `entrypoint.sh` | Installs gamja on the volume, writes the soju config from env vars, creates the first admin, starts nginx then soju |
-| `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `/data/gamja` |
+| `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` (`/data/gamja`) |
 | `nginx.conf`    | Serves gamja, proxies `/socket`, `/healthz`, rate limits |
 
 ## Environment variables
@@ -41,12 +50,13 @@ Data (the SQLite DB) is stored in `/data`, and gamja in `/data/gamja`.
 | --------------------- | --------------------------------------------- | ----------- |
 | `SOJU_HOSTNAME`       | `soju`                                        | Server name shown to clients (gamja: "Connected to soju") |
 | `SOJU_TITLE`          | —                                             | Server title shown to clients |
-| `SOJU_ADMIN_USER`     | —                                             | Admin user created on first start (only while `/data/main.db` doesn't exist) |
+| `SOJU_ADMIN_USER`     | —                                             | Admin user created on first start (only while `/data/soju/main.db` doesn't exist) |
 | `SOJU_ADMIN_PASSWORD` | —                                             | Password for that admin user |
 | `SOJU_EXTRA_CONFIG`   | —                                             | Extra soju config lines appended as-is (e.g. `max-user-networks 5`) |
 | `SOJU_CONFIG_FILE`    | —                                             | Path to a complete soju config. If set, the env vars above that build the config are ignored |
 | `GAMJA_CONFIG_JSON`   | `{"server":{"auth":"mandatory","ping":30}}`   | gamja [config file] contents, served at `/config.json` |
-| `DATA_DIR`            | `/data`                                       | Where the DB is stored |
+| `SOJU_DATA_DIR`       | `/data/soju`                                  | Where the soju DB (`main.db`) is stored |
+| `GAMJA_DATA_DIR`      | `/data/gamja`                                 | Where gamja is installed; `update-gamja.sh` is copied to its parent directory |
 | `CLOUDFLARED_TOKEN`   | —                                             | Cloudflare Tunnel token. If set, runs cloudflared and binds IRC to loopback |
 
 Build argument: `GAMJA_REF` (default `latest`) selects the gamja release tag
@@ -117,7 +127,7 @@ Open the service → **Volumes → Add volume**:
 Save. The service restarts with the volume attached. A service with a volume
 runs a single instance, which is what soju needs anyway.
 
-> Order matters: the admin user is created only when `/data/main.db` doesn't
+> Order matters: the admin user is created only when `/data/soju/main.db` doesn't
 > exist yet. If the service started before the volume was attached, that
 > first admin was written to the container's temporary disk. After you attach
 > the volume, the service restarts, sees an empty `/data` and creates the
@@ -197,7 +207,7 @@ sojuctl user status
 ### Backups
 
 From the volume's page, take a backup or set up scheduled backups. The data
-lives in `/data/main.db`.
+lives in `/data/soju/main.db`.
 
 ## Updating gamja
 

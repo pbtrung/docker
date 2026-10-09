@@ -1,11 +1,13 @@
 #!/bin/sh
 set -e
 
-# Persistent volume: SQLite DB. Mount a Northflank volume here.
-DATA_DIR="${DATA_DIR:-/data}"
+# Persistent volume, mounted at /data: the SQLite DB in /data/soju and
+# gamja in /data/gamja.
+SOJU_DATA_DIR="${SOJU_DATA_DIR:-/data/soju}"
+GAMJA_DATA_DIR="${GAMJA_DATA_DIR:-/data/gamja}"
 SOJU_CONF=/etc/soju/config
 
-mkdir -p /etc/soju /run/soju
+mkdir -p /etc/soju /run/soju "$SOJU_DATA_DIR"
 
 # With a Cloudflare Tunnel, IRC only listens on loopback: the only way in
 # from outside is through cloudflared.
@@ -14,22 +16,31 @@ if [ -n "$CLOUDFLARED_TOKEN" ]; then
 else
   IRC_LISTEN="irc+insecure://0.0.0.0:6667"
 fi
-chown soju:soju "$DATA_DIR" /run/soju
+# -R: the DB (and its -wal/-shm files) may have been copied in as root.
+# Only soju needs to read it (it holds password hashes and network secrets).
+chown -R soju:soju "$SOJU_DATA_DIR"
+chmod -R u+rwX,go-rwx "$SOJU_DATA_DIR"
+chown soju:soju /run/soju
 
 # gamja lives on the volume so it can be updated without a new image: run
-# $DATA_DIR/update-gamja.sh from a shell. Seed it from the release baked into
-# the image on the first start; nginx serves it through the /usr/share/gamja
-# symlink.
-GAMJA_DIR="$DATA_DIR/gamja"
-if [ ! -f "$GAMJA_DIR/index.html" ]; then
+# update-gamja.sh (copied next to $GAMJA_DATA_DIR) from a shell. Seed it from
+# the release baked into the image on the first start; nginx serves it
+# through the /usr/share/gamja symlink.
+if [ ! -f "$GAMJA_DATA_DIR/index.html" ]; then
   printf "Installing bundled gamja %s in %s\n" \
-    "$(cat /usr/share/gamja-dist/.version)" "$GAMJA_DIR"
-  rm -rf "$GAMJA_DIR"
-  cp -a /usr/share/gamja-dist "$GAMJA_DIR"
+    "$(cat /usr/share/gamja-dist/.version)" "$GAMJA_DATA_DIR"
+  rm -rf "$GAMJA_DATA_DIR"
+  mkdir -p "$(dirname "$GAMJA_DATA_DIR")"
+  cp -a /usr/share/gamja-dist "$GAMJA_DATA_DIR"
 fi
-ln -sfn "$GAMJA_DIR" /usr/share/gamja
-cp /usr/local/bin/update-gamja.sh "$DATA_DIR/update-gamja.sh"
-chmod +x "$DATA_DIR/update-gamja.sh"
+# Root owns gamja; nginx workers must be able to reach and read it.
+chown -R root:root "$GAMJA_DATA_DIR"
+chmod a+x "$(dirname "$GAMJA_DATA_DIR")"
+chmod -R a+rX "$GAMJA_DATA_DIR"
+ln -sfn "$GAMJA_DATA_DIR" /usr/share/gamja
+UPDATE_GAMJA="$(dirname "$GAMJA_DATA_DIR")/update-gamja.sh"
+cp /usr/local/bin/update-gamja.sh "$UPDATE_GAMJA"
+chmod +x "$UPDATE_GAMJA"
 
 # soju config: use SOJU_CONFIG_FILE as-is if given (e.g. a Northflank secret
 # file), otherwise render one from environment variables.
@@ -44,7 +55,7 @@ else
   # soju would use the container hostname, i.e. the Kubernetes pod name.
   SOJU_HOSTNAME="${SOJU_HOSTNAME:-soju}"
   {
-    printf "db sqlite3 %s/main.db\n" "$DATA_DIR"
+    printf "db sqlite3 %s/main.db\n" "$SOJU_DATA_DIR"
     printf "message-store db\n"
     printf "listen %s\n" "$IRC_LISTEN"
     printf "listen http+insecure://127.0.0.1:8081\n"
@@ -62,7 +73,7 @@ printf "soju config:\n"
 sed 's/^/  /' "$SOJU_CONF"
 
 # Bootstrap the first admin user on an empty database.
-if [ -n "$SOJU_ADMIN_USER" ] && [ -n "$SOJU_ADMIN_PASSWORD" ] && [ ! -f "$DATA_DIR/main.db" ]; then
+if [ -n "$SOJU_ADMIN_USER" ] && [ -n "$SOJU_ADMIN_PASSWORD" ] && [ ! -f "$SOJU_DATA_DIR/main.db" ]; then
   printf "Creating admin user %s\n" "$SOJU_ADMIN_USER"
   printf "%s\n" "$SOJU_ADMIN_PASSWORD" |
     su-exec soju sojudb -config "$SOJU_CONF" create-user "$SOJU_ADMIN_USER" -admin

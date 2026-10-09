@@ -14,7 +14,7 @@ RUN mkdir -p /out && \
 # gamja: prebuilt release from pbtrung/gamja, seeded into /data/gamja on
 # first start
 COPY update-gamja.sh /usr/local/bin/
-RUN GAMJA_DIR=/out/gamja update-gamja.sh "${GAMJA_REF}"
+RUN GAMJA_DATA_DIR=/out/gamja update-gamja.sh "${GAMJA_REF}"
 
 FROM alpine:edge
 
