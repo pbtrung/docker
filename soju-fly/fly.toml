@@ -1,20 +1,38 @@
 app = 'soju-ndq0bn8tgjuyd'
 primary_region = 'iad'
 
+# soju is a bouncer: it must stay connected to the upstream IRC networks,
+# so the app runs exactly one machine, always on:
+# - no [http_service]/[[services]]: the Fly proxy only auto-stops and
+#   auto-starts machines behind a service, so it never touches this one
+# - the volume attaches to one machine only, and soju can't run as several
+#   instances; deploy with --ha=false so the first deploy creates one
+#   machine, not two, and check with `fly scale show` (`fly scale count 1`)
+# - [[restart]] brings it back whenever soju exits or the machine crashes
+# gamja (8080) and IRC (6667) are only reachable over Cloudflare Mesh and
+# Fly's private network.
+
+# soju shuts down cleanly on SIGTERM: it closes the upstream connections
+# and flushes the DB
+kill_signal = 'SIGTERM'
+kill_timeout = '30s'
+
+# 256 MB is tight for soju + nginx; swap keeps a spike from OOM-killing soju
+swap_size_mb = 512
+
 [build]
   dockerfile = 'Dockerfile'
+
+# A single machine with a volume can only be replaced in place: stop it,
+# then start the new image on the same volume
+[deploy]
+  strategy = 'immediate'
 
 # soju DB, gamja and the Cloudflare Mesh registration
 [mounts]
   source = 'soju_data'
   destination = '/data'
   initial_size = '1gb'
-
-# No public service: gamja (8080) and IRC (6667) are only reachable over
-# Cloudflare Mesh and Fly's private network. Without a service the Fly
-# proxy never stops or starts the machine, so it stays the only one and
-# always runs (deploy with --ha=false so the first deploy creates one, not
-# two).
 
 # Health check run by Fly on the machine itself
 [checks]
@@ -27,7 +45,8 @@ primary_region = 'iad'
     interval = '30s'
     timeout = '5s'
 
-# Restart the machine whenever soju (or the entrypoint) exits
+# Restart the machine whenever soju (or the entrypoint) exits, with no
+# retry limit
 [[restart]]
   policy = 'always'
 

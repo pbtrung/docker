@@ -248,6 +248,12 @@ kernel, which has it.
   (`accept-proxy-ip localhost`). Rate limits apply per client.
 - gamja sends `PING` every 30 s by default (`GAMJA_CONFIG_JSON`) to keep
   its WebSocket open through NAT along the way.
+- The machine never stops on its own: there's no service for the Fly proxy
+  to auto-stop, and `[[restart]] policy = 'always'` restarts it if soju
+  exits. Deploys stop it and start the new image on the same volume
+  (`strategy = 'immediate'`), sending soju `SIGTERM` with 30 s to shut
+  down cleanly. 512 MB of swap keeps a memory spike from OOM-killing soju
+  on the 256 MB VM.
 - gamja is served over plain HTTP. The Mesh tunnel encrypts the traffic in
   transit.
 
