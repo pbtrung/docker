@@ -266,8 +266,10 @@ play something, put a list in the volume (e.g. `docker cp magnet.txt
   start, so they don't race to create it.
 - snapserver-rs starts first. `play.sh` waits until it answers JSON-RPC on
   `127.0.0.1:1780`, so the first track's metadata reaches it.
-- snapserver-rs is PID 1: if it exits, the container stops and Northflank
-  restarts it. Finished batches are then played once (see above).
+- snapserver-rs is the main process (the entrypoint execs it): if it exits,
+  the container stops and Northflank restarts it. Finished batches are then
+  played once (see above). The entrypoint finds it by its own PID, not PID 1,
+  since the platform may run its own init as PID 1.
 - cloudflared follows the Alpine edge `testing` package, so each rebuild picks
   up whatever version it ships.
 

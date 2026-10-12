@@ -9,6 +9,9 @@ SNAPWEB_DATA_DIR="${SNAPWEB_DATA_DIR:-/data/snapweb}"
 SNAPSERVER_CONF="${SNAPSERVER_CONF:-/etc/snapserver.conf}"
 PLAY_LIST="${PLAY_LIST:-/data/magnet.txt}"
 FIFO=/tmp/snapfifo
+# The final exec keeps this shell's PID, so this becomes snapserver-rs's PID.
+# Not PID 1: the platform may run its own init as PID 1 (docker --init).
+MAIN_PID=$$
 
 mkdir -p "$SNAPCAST_DATA_DIR"
 chown snapcast:snapcast "$SNAPCAST_DATA_DIR"
@@ -48,8 +51,8 @@ chown snapcast:snapcast "$FIFO"
 # Cloudflare Tunnel (remotely managed): routes such as tcp://localhost:1704
 # or http://localhost:8080 are configured in the Cloudflare dashboard.
 # cloudflared only makes outbound connections, so no inbound port is needed.
-# If it exits, stop the container: PID 1 becomes snapserver-rs after the
-# final exec, so wait for that, then SIGTERM it.
+# If it exits, stop the container: wait until $MAIN_PID is snapserver-rs
+# (after the final exec), then SIGTERM it.
 if [ -n "$CLOUDFLARED_TOKEN" ]; then
   printf "Starting cloudflared tunnel\n"
   (
@@ -57,8 +60,8 @@ if [ -n "$CLOUDFLARED_TOKEN" ]; then
     su-exec snapcast cloudflared tunnel --no-autoupdate --loglevel info \
       run --token "$CLOUDFLARED_TOKEN" || status=$?
     printf "cloudflared exited with status %s, stopping container\n" "$status"
-    while [ "$(cat /proc/1/comm)" != snapserver-rs ]; do sleep 1; done
-    kill -TERM 1
+    while [ "$(cat "/proc/$MAIN_PID/comm")" != snapserver-rs ]; do sleep 1; done
+    kill -TERM "$MAIN_PID"
   ) &
 else
   printf "CLOUDFLARED_TOKEN not set, skipping cloudflared\n"
@@ -67,11 +70,12 @@ fi
 # play.sh downloads and plays the torrents in $PLAY_LIST once, then exits;
 # snapserver-rs keeps running. setsid: play.sh's Ctrl-C/TERM trap does
 # `kill 0` on its process group, which must not include snapserver-rs.
-# snapserver-rs starts first: play.sh waits until it is PID 1 (after the
-# final exec) and answers JSON-RPC, so the first track's metadata isn't lost.
+# snapserver-rs starts first: play.sh waits until $MAIN_PID is snapserver-rs
+# and answers JSON-RPC, so the first track's metadata isn't lost.
 if [ -f "$PLAY_LIST" ]; then
+  printf "Waiting for snapserver-rs before starting play.sh\n"
   (
-    while [ "$(cat /proc/1/comm)" != snapserver-rs ] ||
+    while [ "$(cat "/proc/$MAIN_PID/comm")" != snapserver-rs ] ||
       ! curl -sf --max-time 2 -o /dev/null \
         -d '{"jsonrpc":"2.0","id":1,"method":"Server.GetStatus"}' \
         http://127.0.0.1:1780/jsonrpc; do
