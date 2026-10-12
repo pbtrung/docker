@@ -72,7 +72,11 @@ fi
 # `kill 0` on its process group, which must not include snapserver-rs.
 # snapserver-rs starts first: play.sh waits until $MAIN_PID is snapserver-rs
 # and answers JSON-RPC, so the first track's metadata isn't lost.
+# play.sh runs as snapcast and gets a copy of the list it can read: the
+# original may be root-only (written from a root shell, or a secret file).
+PLAY_LIST_COPY=/tmp/play-list.txt
 if [ -f "$PLAY_LIST" ]; then
+  install -o snapcast -g snapcast -m 600 "$PLAY_LIST" "$PLAY_LIST_COPY"
   printf "Waiting for snapserver-rs before starting play.sh\n"
   (
     while [ "$(cat "/proc/$MAIN_PID/comm")" != snapserver-rs ] ||
@@ -84,7 +88,7 @@ if [ -f "$PLAY_LIST" ]; then
     printf "snapserver-rs is up, starting play.sh with %s\n" "$PLAY_LIST"
     cd "$SNAPCAST_DATA_DIR"
     status=0
-    setsid su-exec snapcast /script/play.sh "$PLAY_LIST" || status=$?
+    setsid su-exec snapcast /script/play.sh "$PLAY_LIST_COPY" || status=$?
     printf "play.sh exited with status %s\n" "$status"
   ) &
 else

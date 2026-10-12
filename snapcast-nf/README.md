@@ -35,7 +35,7 @@ from another service in the same Northflank project.
 
 ```
 /data/
-├── magnet.txt          torrent list played by play.sh (PLAY_LIST), you create it
+├── magnet.txt          torrent list played by play.sh (PLAY_LIST), a mounted secret file
 ├── snapcast/           play.sh working dir: download/ batches, rqbit.log
 ├── snapweb/            Snapweb (SNAPWEB_DATA_DIR), snapserver's doc_root
 └── update-snapweb.sh   Snapweb updater, copied on every start
@@ -76,7 +76,7 @@ Batches that finished downloading before a restart are played once on the
 next start. Unfinished ones are deleted.
 
 `play.sh` runs once per container start. When the list is done, snapserver
-keeps running (silent). To play a new list, edit `/data/magnet.txt` and
+keeps running (silent). To play a new list, change `/data/magnet.txt` and
 restart the service.
 
 ## Environment variables
@@ -84,7 +84,7 @@ restart the service.
 | Variable            | Default                | Description |
 | ------------------- | ---------------------- | ----------- |
 | `CLOUDFLARED_TOKEN` | —                      | Cloudflare Tunnel token. If set, runs `cloudflared tunnel run` |
-| `PLAY_LIST`         | `/data/magnet.txt`     | Torrent list for `play.sh`. If the file doesn't exist, nothing is played |
+| `PLAY_LIST`         | `/data/magnet.txt`     | Torrent list for `play.sh`, copied to `/tmp/play-list.txt` for the `snapcast` user. If the file doesn't exist, nothing is played |
 | `SNAPSERVER_CONF`   | `/etc/snapserver.conf` | snapserver-rs config (the bundled `snapserver.conf`). Point it at a file on the volume to use your own |
 | `SNAPCAST_DATA_DIR` | `/data/snapcast`       | `play.sh` working directory (downloads, `rqbit.log`) |
 | `SNAPWEB_DATA_DIR`  | `/data/snapweb`        | Where Snapweb is installed. If you change it, change `doc_root` in the snapserver config too |
@@ -166,16 +166,18 @@ Service → **Health checks → Add health check**:
 
 ### 8. Add the torrent list
 
-Open a shell on the running container (service → **Containers** → **Shell**)
-and write the list:
+Mount the list as a secret file: service → **Environment → Secret files →
+Add file**, mount path `/data/magnet.txt`, with content like:
 
-```sh
-cat > /data/magnet.txt <<'EOF'
+```
 # one magnet link / torrent URL per line
 magnet:?xt=urn:btih:...
 https://example.org/album.torrent
-EOF
 ```
+
+Secret files are mounted read-only and readable only by root. `play.sh` runs
+as `snapcast`, so the entrypoint (still root) copies the list to
+`/tmp/play-list.txt`, owned by `snapcast`, and plays that copy.
 
 Restart the service (**Restart** in the service header). `play.sh` starts and
 its output appears in the container logs (`>>> Listing`, `>>> Downloading

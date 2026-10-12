@@ -15,6 +15,7 @@
 set -u
 
 LIST="${1:?usage: $0 <list-file>}"
+[[ -r "$LIST" ]] || { echo "!!! Can't read list file: $LIST" >&2; exit 1; }
 RQBIT="${RQBIT:-rqbit}"            # rqbit binary (the image installs it in /usr/local/bin)
 DL_DIR="./download"
 FIFO="/tmp/snapfifo"               # snapserver-rs source must read floats: pipe:///tmp/snapfifo?...&encoding=float
