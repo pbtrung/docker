@@ -21,7 +21,7 @@ DL_DIR="./download"
 FIFO="/tmp/snapfifo"               # snapserver-rs source must read floats: pipe:///tmp/snapfifo?...&encoding=float
 RQBIT_LOG="./rqbit.log"            # rqbit --log-file for downloads (holds the current download only)
 UPLOAD_LIMIT=256000                # rqbit --ratelimit-upload, bytes per second
-ROUNDS=2
+ROUNDS=1
 BATCH_MAX=$((2 * 1024 ** 3))
 LIST_TIMEOUT=600                   # seconds to wait for torrent metadata
 DONE_MARK=".batch_complete"        # in a batch dir: it finished downloading; holds its label
@@ -170,7 +170,7 @@ snap_set_metadata() {
 # play_playlist <rounds>
 # Each track is decoded by its own ffmpeg, resampled to 48 kHz with soxr,
 # normalized with dynaudnorm and written to the FIFO as float PCM. No 16-bit
-# step: snapserver-rs (encoding=float) hands the floats to the Opus encoder.
+# step here: snapserver-rs (encoding=float) converts to its sampleformat.
 # Keep -y: without it ffmpeg refuses to open the existing FIFO ("already exists").
 #
 # -readrate 1.05: read the input at 1.05x real time (after a 10 s initial

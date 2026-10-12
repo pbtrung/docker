@@ -23,7 +23,7 @@ browser ──https──▶ Northflank LB ──▶ :8080 nginx ─┬─ /    
                                     :1705 JSON-RPC over TCP     (private TCP)
 
 play.sh ── rqbit download ──▶ /data/snapcast/download/<batch>/
-        └─ ffmpeg (soxr 48 kHz, dynaudnorm, f32le) ──▶ /tmp/snapfifo ──▶ snapserver-rs (Opus 256 kbit/s)
+        └─ ffmpeg (soxr 48 kHz, dynaudnorm, f32le) ──▶ /tmp/snapfifo ──▶ snapserver-rs (FLAC 48 kHz/16-bit)
 ```
 
 Northflank only exposes HTTP ports publicly. So Snapweb (port 8080) is
@@ -48,7 +48,7 @@ from another service in the same Northflank project.
 | `Dockerfile`        | `builder` stage downloads rqbit, snapserver-rs (checked against `SHA256SUMS`) and a Snapweb release; runtime stage on alpine:edge installs bash, ffmpeg, nginx, … and cloudflared from edge/testing |
 | `entrypoint.sh`     | Installs Snapweb on the volume, creates the FIFO, starts cloudflared, `play.sh`, nginx, then snapserver-rs |
 | `play.sh`           | Downloads torrents in batches with rqbit and plays them into `/tmp/snapfifo` |
-| `snapserver.conf`   | snapserver-rs config: `pipe:///tmp/snapfifo?…&encoding=float` source, Opus codec, `doc_root = /data/snapweb/` |
+| `snapserver.conf`   | snapserver-rs config: `pipe:///tmp/snapfifo?…&encoding=float` source, FLAC codec, `doc_root = /data/snapweb/` |
 | `nginx.conf`        | Serves Snapweb, proxies `/jsonrpc` and `/stream`, `/healthz`, rate limits |
 | `update-snapweb.sh` | Installs a Snapweb release (latest, or a given tag) into `SNAPWEB_DATA_DIR` |
 
@@ -60,11 +60,11 @@ torrent URL or a `.torrent` path. For each torrent, `play.sh`:
 1. lists its files with `rqbit download --list` and keeps the audio ones
    (`flac wav ape wv tta aiff aif alac m4a mka`). `.m4a` / `.mka` files are
    kept only if their codec is lossless.
-2. splits them into batches of at most 10 GiB (`BATCH_MAX`). It keeps each
+2. splits them into batches of at most 2 GiB (`BATCH_MAX`). It keeps each
    album directory together when it fits.
 3. downloads one batch at a time into `/data/snapcast/download/<seq>`, at
    most one batch ahead of the one playing. Uploads are limited to 256 KB/s.
-4. plays each batch `ROUNDS` (2) times, then deletes it.
+4. plays each batch `ROUNDS` (1) times, then deletes it.
 
 Each track is decoded by ffmpeg, which reads it at 1.05× real time after a
 10 s burst (`-readrate 1.05 -readrate_initial_burst 10`). The audio is
@@ -121,7 +121,7 @@ Inside the project: **Create new → Service → Combined service**.
   - **Build context:** `/snapcast-nf`
   - (optional) **Build arguments:** `RQBIT_REF`, `SNAPCAST_RS_REF`,
     `SNAPWEB_REF` to pin releases
-- **Resources:** ffmpeg (soxr + dynaudnorm) and the Opus encoder need about
+- **Resources:** ffmpeg (soxr + dynaudnorm) and the FLAC encoder need about
   half a vCPU; 1 GB of memory is plenty. **Instances: 1.**
 
 ### 4. Networking
@@ -153,8 +153,8 @@ The other variables have working defaults.
 Open the service → **Volumes → Add volume**:
 
 - **Name:** `snapcast-data`
-- **Size:** at least 2 × `BATCH_MAX` plus some headroom. Two 10 GiB batches
-  can be on disk at once, so **25 GB**. Lower `BATCH_MAX` in `play.sh` if you
+- **Size:** at least 2 × `BATCH_MAX` plus some headroom. Two 2 GiB batches
+  can be on disk at once, so **5 GB**. Lower `BATCH_MAX` in `play.sh` if you
   want a smaller volume.
 - **Mount path:** `/data`
 
