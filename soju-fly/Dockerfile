@@ -36,10 +36,11 @@ RUN addgroup -g 1000 soju && \
 # /etc/soju/config and the admin socket /run/soju/admin, so they work
 # without flags inside the container shell.
 # rclone: copy backups off the machine from a shell.
+# sqlite: inspect the soju DB and take consistent backups from a shell.
 RUN apk update && \
     apk --no-cache upgrade && \
     apk --no-cache add ca-certificates tzdata mailcap nginx su-exec soju \
-      rclone
+      rclone sqlite
 
 COPY --from=builder /out/gamja /usr/share/gamja-dist
 COPY --from=builder /out/dnclient /usr/local/bin/dnclient
@@ -54,6 +55,7 @@ WORKDIR /script
 COPY entrypoint.sh /script/
 COPY nginx.conf /script/nginx.conf
 COPY update-gamja.sh /usr/local/bin/update-gamja.sh
+COPY prune-messages.sh /usr/local/bin/prune-messages.sh
 
 # 8080: nginx (gamja + WebSocket), 6667: soju plain IRC. fly.toml exposes
 # neither publicly: both are only reachable over the Defined Networking

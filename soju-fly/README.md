@@ -47,9 +47,10 @@ Fly settings (`fly.toml`): app `soju-ndq0bn8tgjuyd`, region `iad`, one
 | File              | Purpose |
 | ----------------- | ------- |
 | `fly.toml`        | Fly app config: no public service, `/healthz` check, volume, VM size |
-| `Dockerfile`      | `builder` stage downloads a gamja release and a `dnclient` release from Defined Networking's [downloads]; runtime stage on alpine:edge installs soju and nginx with `apk` |
+| `Dockerfile`      | `builder` stage downloads a gamja release and a `dnclient` release from Defined Networking's [downloads]; runtime stage on alpine:edge installs soju, nginx, rclone and sqlite with `apk` |
 | `entrypoint.sh`   | Installs gamja on the volume, starts dnclient (enrolling it once), writes the soju config from env vars, creates the first admin, starts nginx then soju |
 | `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` |
+| `prune-messages.sh` | Deletes messages older than N days from the soju DB, then vacuums it |
 | `nginx.conf`      | Serves gamja, proxies `/socket`, `/healthz`, rate limits |
 
 ## Environment variables
@@ -195,11 +196,32 @@ network, e.g. `fly proxy 8080` then `http://localhost:8080`.
 ## Backups
 
 Fly takes daily snapshots of the volume (`fly volumes snapshots list <volume-id>`).
-To copy the DB out:
+To copy the DB out, first take a consistent copy with the `sqlite3` CLI
+(soju keeps writing to `main.db` and its `-wal` file while it runs):
 
 ```sh
-fly ssh sftp get /data/soju/main.db main.db
+fly ssh console -C "sqlite3 /data/soju/main.db '.backup /tmp/main.db'"
+fly ssh sftp get /tmp/main.db main.db
 ```
+
+`sqlite3` also lets you inspect the DB from a shell, e.g.
+`sqlite3 -readonly /data/soju/main.db '.tables'`.
+
+## Prune old messages
+
+soju keeps every message forever (`message-store db`). To delete the
+messages older than a number of days, in every network and channel, and
+then `VACUUM` the DB to give the space back to the volume:
+
+```sh
+fly ssh console -C 'prune-messages.sh /data/soju/main.db 20'
+```
+
+It can run while soju is up: it waits for soju's locks, and runs
+`sqlite3` as the DB's owner so no root-owned `-wal`/`-shm` files are left
+behind. Channels and their pinned/muted state are kept; only the messages
+go, and the search index is updated with them. `VACUUM` briefly needs
+about the DB's size again in free space on the volume.
 
 ## Run locally
 
