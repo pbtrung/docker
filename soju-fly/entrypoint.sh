@@ -2,13 +2,9 @@
 set -e
 
 # Persistent Fly volume, mounted at /data: the SQLite DB in /data/soju,
-# gamja in /data/gamja, the Cloudflare Mesh registration in
-# /data/wgcf-mesh and the dnclient enrollment in /data/defined.
+# gamja in /data/gamja and the dnclient enrollment in /data/defined.
 SOJU_DATA_DIR="${SOJU_DATA_DIR:-/data/soju}"
 GAMJA_DATA_DIR="${GAMJA_DATA_DIR:-/data/gamja}"
-WGCF_MESH_DIR="${WGCF_MESH_DIR:-/data/wgcf-mesh}"
-WGCF_MESH_ROUTES="${WGCF_MESH_ROUTES:-100.96.0.0/12}"
-WG_IF=wg0
 SOJU_CONF=/etc/soju/config
 
 mkdir -p /etc/soju /run/soju "$SOJU_DATA_DIR"
@@ -38,62 +34,6 @@ ln -sfn "$GAMJA_DATA_DIR" /usr/share/gamja
 UPDATE_GAMJA="$(dirname "$GAMJA_DATA_DIR")/update-gamja.sh"
 cp /usr/local/bin/update-gamja.sh "$UPDATE_GAMJA"
 chmod +x "$UPDATE_GAMJA"
-
-# Cloudflare Mesh over WireGuard (kernel module, brought up by wg-quick).
-# The node is registered once with WGCF_MESH_TOKEN and its config is kept on
-# the volume, so restarts and redeploys reuse the same device and Mesh IP
-# instead of adding a new one. wg-quick gets a copy of that config:
-# - no DNS line, so Fly's resolver stays in place (and no resolvconf run)
-# - AllowedIPs = WGCF_MESH_ROUTES instead of ::/0, 0.0.0.0/0: a default
-#   route through the tunnel would also take soju's upstream IRC traffic
-#   and Fly's private network (fly ssh, logs)
-# - MTU capped to fit the link (see below)
-# - PostUp pings a Mesh address so the tunnel handshakes right away
-wgcf_mesh_conf() {
-  ls -t "$WGCF_MESH_DIR"/wgcf-mesh-*.conf 2>/dev/null | head -n 1
-}
-if [ -n "$WGCF_MESH_TOKEN" ] || [ -n "$(wgcf_mesh_conf)" ]; then
-  mkdir -p "$WGCF_MESH_DIR"
-  chmod 700 "$WGCF_MESH_DIR"
-  if [ -z "$(wgcf_mesh_conf)" ]; then
-    printf "Registering Cloudflare Mesh node in %s\n" "$WGCF_MESH_DIR"
-    (
-      cd "$WGCF_MESH_DIR"
-      printf "%s\n" "$WGCF_MESH_TOKEN" |
-        wgcf-mesh.sh --name "${WGCF_MESH_NAME:-${FLY_APP_NAME:-soju}}" -
-    )
-  fi
-  conf="$(wgcf_mesh_conf)"
-  printf "Starting Cloudflare Mesh with %s\n" "$conf"
-
-  # The generated MTU (1420) assumes a 1500-byte link, but Fly's eth0 is
-  # 1420 itself: full-size tunnel packets get dropped, and TCP stalls while
-  # small packets (pings, requests) still get through. Cap the MTU at the
-  # default route's MTU minus 80 (WireGuard over IPv6, the larger overhead).
-  link_dev="$(ip route show default | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1)"
-  mtu="$(sed -n 's/^MTU *= *//p' "$conf" | head -n 1)"
-  max_mtu=$(($(cat "/sys/class/net/$link_dev/mtu") - 80))
-  if [ -z "$mtu" ] || [ "$mtu" -gt "$max_mtu" ]; then
-    printf "Lowering the WireGuard MTU from %s to %s (%s MTU minus 80)\n" \
-      "${mtu:-none}" "$max_mtu" "$link_dev"
-    mtu="$max_mtu"
-  fi
-
-  mkdir -p /etc/wireguard
-  chmod 700 /etc/wireguard
-  (
-    umask 077
-    sed -e '/^DNS *=/d' \
-      -e "s|^AllowedIPs *=.*|AllowedIPs = $(printf "%s" "$WGCF_MESH_ROUTES" | tr ' ' ',' | sed 's/,/, /g')|" \
-      -e "s|^MTU *=.*|MTU = $mtu\\
-PostUp = ping -c2 -W2 100.96.0.7 \|\| true|" \
-      "$conf" >"/etc/wireguard/$WG_IF.conf"
-  )
-  wg-quick down "$WG_IF" 2>/dev/null || true
-  wg-quick up "$WG_IF"
-else
-  printf "WGCF_MESH_TOKEN not set, skipping Cloudflare Mesh\n"
-fi
 
 # Defined Networking (Managed Nebula). dnclient keeps its state in
 # DNCLIENT_STATE_DIR (/data/defined, set in the Dockerfile) instead of
@@ -149,8 +89,8 @@ else
   {
     printf "db sqlite3 %s/main.db\n" "$SOJU_DATA_DIR"
     printf "message-store db\n"
-    # Plain IRC: fly.toml exposes nothing, so only Cloudflare Mesh and
-    # Fly's private network (6PN) can reach it
+    # Plain IRC: fly.toml exposes nothing, so only Defined Networking
+    # and Fly's private network (6PN) can reach it
     printf "listen irc+insecure://[::]:6667\n"
     printf "listen http+insecure://127.0.0.1:8081\n"
     printf "listen unix+admin:///run/soju/admin\n"
