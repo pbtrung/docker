@@ -8,10 +8,13 @@ The [soju-nf](../soju-nf) image adapted for [Fly.io]. It runs:
 - nginx — serves gamja and proxies the IRC WebSocket (`/socket`) to soju
 - [wgcf-mesh] — joins the machine to [Cloudflare Mesh] over WireGuard. It
   replaces cloudflared, which soju-nf uses.
+- [dnclient] — joins the machine to a [Defined Networking] (Managed Nebula)
+  network, alongside the Mesh
 
 Nothing is exposed publicly: `fly.toml` has no service, so the Fly proxy
 doesn't route any traffic to the machine. gamja and soju's plain IRC port are
-only reachable from devices on your Mesh (and from Fly's private network).
+only reachable from devices on your Mesh or Defined network (and from Fly's
+private network).
 
 File uploads (IRCv3 filehost) are disabled: soju has no `file-upload`
 backend and nginx doesn't proxy `/uploads`.
@@ -39,6 +42,8 @@ Fly settings (`fly.toml`): app `soju-ndq0bn8tgjuyd`, region `iad`, one
 ├── wgcf-mesh/                   Mesh registration (WGCF_MESH_DIR)
 │   ├── wgcf-mesh-<id>.conf      WireGuard config, with the private key
 │   └── wgcf-mesh-<id>.json      device profile, to delete the device later
+├── defined/                     dnclient state (DNCLIENT_STATE_DIR)
+│   └── dnclient.yml             enrollment: host keys and Nebula config
 └── update-gamja.sh              gamja updater, copied on every start
 ```
 
@@ -47,8 +52,8 @@ Fly settings (`fly.toml`): app `soju-ndq0bn8tgjuyd`, region `iad`, one
 | File              | Purpose |
 | ----------------- | ------- |
 | `fly.toml`        | Fly app config: no public service, `/healthz` check, volume, VM size |
-| `Dockerfile`      | `builder` stage downloads a gamja release and `wgcf-mesh.sh`; runtime stage on alpine:edge installs soju, nginx and wireguard-tools (`wg-quick`) with `apk` |
-| `entrypoint.sh`   | Installs gamja on the volume, registers and brings up the Mesh, writes the soju config from env vars, creates the first admin, starts nginx then soju |
+| `Dockerfile`      | `builder` stage downloads a gamja release and `wgcf-mesh.sh`; a `dnclient` release from Defined Networking's [downloads]; runtime stage on alpine:edge installs soju, nginx and wireguard-tools (`wg-quick`) with `apk` |
+| `entrypoint.sh`   | Installs gamja on the volume, registers and brings up the Mesh, starts dnclient (enrolling it once), writes the soju config from env vars, creates the first admin, starts nginx then soju |
 | `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` |
 | `nginx.conf`      | Serves gamja, proxies `/socket`, `/healthz`, rate limits |
 
@@ -63,6 +68,9 @@ Set plain values under `[env]` in `fly.toml`, and secrets with
 | `WGCF_MESH_NAME`      | `$FLY_APP_NAME`                             | Device name shown in the Cloudflare dashboard, set at registration |
 | `WGCF_MESH_ROUTES`    | `100.96.0.0/12`                             | Space- or comma-separated CIDRs sent through the tunnel (the `AllowedIPs` given to wg-quick) |
 | `WGCF_MESH_DIR`       | `/data/wgcf-mesh`                           | Where the Mesh config and device profile are kept |
+| `DN_ENROLLMENT_CODE`  | —                                           | Defined Networking enrollment code. **Secret.** Used only while `$DNCLIENT_STATE_DIR/dnclient.yml` doesn't exist |
+| `DN_API_SERVER`       | `https://api.defined.net`                   | Defined Networking API server |
+| `DNCLIENT_STATE_DIR`  | `/data/defined`                             | Where dnclient keeps its enrollment (instead of `/var/lib/defined`) |
 | `SOJU_HOSTNAME`       | `soju`                                      | Server name shown to clients (gamja: "Connected to soju") |
 | `SOJU_TITLE`          | —                                           | Server title shown to clients |
 | `SOJU_ADMIN_USER`     | —                                           | Admin user created on first start (only while `/data/soju/main.db` doesn't exist) |
@@ -76,7 +84,9 @@ Set plain values under `[env]` in `fly.toml`, and secrets with
 Build arguments: `GAMJA_REF` (default `latest`) selects the gamja release
 bundled in the image, only installed on a volume without gamja.
 `WGCF_MESH_REF` (default `main`) is the [wgcf-mesh] branch, tag or commit
-to download `wgcf-mesh.sh` from.
+to download `wgcf-mesh.sh` from. `DNCLIENT_VERSION` (default `latest`) is
+the dnclient version to download (e.g. `0.9.9`), looked up in
+`https://api.defined.net/v1/downloads`.
 
 ## Deploy
 
@@ -92,6 +102,8 @@ fly secrets set -a soju-ndq0bn8tgjuyd --stage \
   SOJU_ADMIN_USER=admin \
   SOJU_ADMIN_PASSWORD='<a strong password>'
 printf 'WGCF_MESH_TOKEN=%s\n' "$(cat token.txt)" |
+  fly secrets import -a soju-ndq0bn8tgjuyd --stage
+printf 'DN_ENROLLMENT_CODE=%s\n' '<enrollment code>' |
   fly secrets import -a soju-ndq0bn8tgjuyd --stage
 
 # 3. Build and deploy a single machine
@@ -200,11 +212,42 @@ Per wgcf-mesh, a WireGuard node can't serve IPv6 CIDR routes, hostname
 routes or high availability. Plain IPv4 Mesh IPs, which this setup uses,
 work.
 
+## Defined Networking
+
+With `DN_ENROLLMENT_CODE` set, the entrypoint starts `dnclient run` in the
+background and, on the first start only, enrolls the host with
+`dnclient enroll -code`. dnclient's state lives in `/data/defined` (set with
+`DNCLIENT_STATE_DIR` in the image) rather than its usual `/var/lib/defined`,
+so it survives restarts and redeploys. Once `/data/defined/dnclient.yml`
+exists, the code isn't used again: later starts only run the daemon, and
+you can remove the secret with `fly secrets unset DN_ENROLLMENT_CODE`.
+
+1. In the [Defined Networking admin panel][dn admin], add a host and copy
+   its enrollment code (codes are single-use and expire).
+2. Store it as a secret (see [Deploy](#deploy)) and deploy. The logs show
+   `Enrolling with Defined Networking`; the host's Nebula IP is in the
+   admin panel, or `fly ssh console -C 'dnclient info'`.
+3. Allow ports 8080 and 6667 to the host in its role's firewall rules, then
+   connect from another host on the network to `<nebula-ip>:6667` or
+   `http://<nebula-ip>:8080`.
+
+If enrollment fails (a bad or used code), the machine fails to start and Fly
+restarts it. To enroll again (e.g. as another host), delete the state and
+set a new code:
+
+```sh
+fly ssh console -C 'rm -rf /data/defined'
+printf 'DN_ENROLLMENT_CODE=%s\n' '<new code>' | fly secrets import  # restarts the machine
+```
+
+Without `DN_ENROLLMENT_CODE` and without a saved `dnclient.yml`, dnclient
+isn't started.
+
 ## Updating
 
 - `fly deploy` rebuilds the image and picks up the latest soju from Alpine
-  edge and the latest `wgcf-mesh.sh`. The DB and the Mesh registration live
-  on the volume and survive it. soju migrates its schema itself on startup.
+  edge and the latest `wgcf-mesh.sh` and `dnclient`. The DB, the Mesh
+  registration and the dnclient enrollment live on the volume and survive it. soju migrates its schema itself on startup.
 - gamja is updated from a shell, not by a new image:
 
   ```sh
@@ -237,7 +280,8 @@ docker run --rm -p 8080:8080 -v soju-data:/data \
   soju-fly
 ```
 
-`--cap-add NET_ADMIN` is only needed with `WGCF_MESH_TOKEN`, and the host
+`--cap-add NET_ADMIN` is only needed with `WGCF_MESH_TOKEN` or
+`DN_ENROLLMENT_CODE` (add `-e DN_ENROLLMENT_CODE=...` for the latter), and the host
 kernel must have WireGuard. On Fly, the machine is a full VM with its own
 kernel, which has it.
 
@@ -264,4 +308,8 @@ kernel, which has it.
 [wgcf-mesh]: https://github.com/AnimMouse/wgcf-mesh
 [Cloudflare Mesh]: https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-mesh/
 [create node]: https://dash.cloudflare.com/?to=/:account/mesh
+[dnclient]: https://docs.defined.net/glossary/dnclient/
+[Defined Networking]: https://www.defined.net/
+[downloads]: https://www.defined.net/downloads/
+[dn admin]: https://admin.defined.net/
 [config file]: https://codeberg.org/emersion/gamja/src/branch/master/doc/config-file.md

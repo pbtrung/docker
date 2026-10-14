@@ -2,8 +2,8 @@
 set -e
 
 # Persistent Fly volume, mounted at /data: the SQLite DB in /data/soju,
-# gamja in /data/gamja and the Cloudflare Mesh registration in
-# /data/wgcf-mesh.
+# gamja in /data/gamja, the Cloudflare Mesh registration in
+# /data/wgcf-mesh and the dnclient enrollment in /data/defined.
 SOJU_DATA_DIR="${SOJU_DATA_DIR:-/data/soju}"
 GAMJA_DATA_DIR="${GAMJA_DATA_DIR:-/data/gamja}"
 WGCF_MESH_DIR="${WGCF_MESH_DIR:-/data/wgcf-mesh}"
@@ -93,6 +93,45 @@ PostUp = ping -c2 -W2 100.96.0.7 \|\| true|" \
   wg-quick up "$WG_IF"
 else
   printf "WGCF_MESH_TOKEN not set, skipping Cloudflare Mesh\n"
+fi
+
+# Defined Networking (Managed Nebula). dnclient keeps its state in
+# DNCLIENT_STATE_DIR (/data/defined, set in the Dockerfile) instead of
+# /var/lib/defined, so the host is enrolled once with DN_ENROLLMENT_CODE
+# and every later start reuses dnclient.yml: the code isn't used again.
+# Enrolling goes through the running daemon's control socket.
+DNCLIENT_STATE_DIR="${DNCLIENT_STATE_DIR:-/data/defined}"
+DNCLIENT_SOCKET_DIR="${DNCLIENT_SOCKET_DIR:-/run}"
+export DNCLIENT_STATE_DIR DNCLIENT_SOCKET_DIR
+if [ -n "$DN_ENROLLMENT_CODE" ] || [ -f "$DNCLIENT_STATE_DIR/dnclient.yml" ]; then
+  mkdir -p "$DNCLIENT_STATE_DIR"
+  chmod 700 "$DNCLIENT_STATE_DIR"
+  mkdir -p /dev/net
+  if [ ! -c /dev/net/tun ]; then
+    mknod /dev/net/tun c 10 200
+    chmod 600 /dev/net/tun
+  fi
+
+  printf "Starting dnclient with state in %s\n" "$DNCLIENT_STATE_DIR"
+  dnclient run -server "${DN_API_SERVER:-https://api.defined.net}" &
+  i=0
+  while [ ! -S "$DNCLIENT_SOCKET_DIR/dnclient.sock" ]; do
+    i=$((i + 1))
+    if [ "$i" -gt 10 ]; then
+      printf "dnclient didn't open %s/dnclient.sock\n" "$DNCLIENT_SOCKET_DIR"
+      exit 1
+    fi
+    sleep 1
+  done
+
+  if [ ! -f "$DNCLIENT_STATE_DIR/dnclient.yml" ]; then
+    printf "Enrolling with Defined Networking\n"
+    dnclient enroll -code "$DN_ENROLLMENT_CODE"
+  else
+    printf "Already enrolled with Defined Networking, not enrolling again\n"
+  fi
+else
+  printf "DN_ENROLLMENT_CODE not set, skipping dnclient\n"
 fi
 
 # soju config: use SOJU_CONFIG_FILE as-is if given, otherwise render one
