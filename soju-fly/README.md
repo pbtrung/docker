@@ -2,7 +2,8 @@
 
 The [soju-nf](../soju-nf) image adapted for [Fly.io]. It runs:
 
-- [soju] — IRC bouncer (Alpine edge `soju` package)
+- [soju-rs] — Rust port of the [soju] IRC bouncer, static musl binaries
+  from the latest [pbtrung/soju-rs release][soju-rs releases]
 - [gamja] — IRC web client, prebuilt release from the [pbtrung/gamja] fork,
   kept on the volume so it can be updated from a shell
 - nginx — serves gamja and proxies the IRC WebSocket (`/socket`) to soju
@@ -14,8 +15,8 @@ doesn't route any traffic to the machine. gamja and soju's plain IRC port are
 only reachable from hosts on your Defined network (and from Fly's
 private network).
 
-File uploads (IRCv3 filehost) are disabled: soju has no `file-upload`
-backend and nginx doesn't proxy `/uploads`.
+File uploads (IRCv3 filehost) are disabled: soju-rs doesn't support them
+and nginx doesn't proxy `/uploads`.
 
 ```
 browser ───Nebula──▶ <nebula-ip>:8080 nginx ─┬─ /            gamja static files
@@ -47,7 +48,8 @@ Fly settings (`fly.toml`): app `soju-ndq0bn8tgjuyd`, region `iad`, one
 | File              | Purpose |
 | ----------------- | ------- |
 | `fly.toml`        | Fly app config: no public service, `/healthz` check, volume, VM size |
-| `Dockerfile`      | `builder` stage downloads a gamja release and a `dnclient` release from Defined Networking's [downloads]; runtime stage on alpine:edge installs soju, nginx, rclone and sqlite with `apk` |
+| `Dockerfile`      | `builder` stage downloads a soju-rs release (checked against its `SHA256SUMS`), a gamja release and a `dnclient` release from Defined Networking's [downloads]; runtime stage on alpine:edge installs nginx, rclone and sqlite with `apk` |
+| `soju-wrapper.sh` | Installed as `soju` and `sojuctl`: runs the soju-rs binary with `-config /etc/soju/config` |
 | `entrypoint.sh`   | Installs gamja on the volume, starts dnclient (enrolling it once), writes the soju config from env vars, creates the first admin, starts nginx then soju |
 | `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` |
 | `prune-messages.sh` | Deletes messages older than N days from the soju DB, then vacuums it |
@@ -73,7 +75,9 @@ Set plain values under `[env]` in `fly.toml`, and secrets with
 | `SOJU_DATA_DIR`       | `/data/soju`                                | Where the soju DB (`main.db`) is stored |
 | `GAMJA_DATA_DIR`      | `/data/gamja`                               | Where gamja is installed; `update-gamja.sh` is copied to its parent directory |
 
-Build arguments: `GAMJA_REF` (default `latest`) selects the gamja release
+Build arguments: `SOJU_REF` (default `latest`) selects the
+[soju-rs release][soju-rs releases] to install (e.g. `v0.99.0`).
+`GAMJA_REF` (default `latest`) selects the gamja release
 bundled in the image, only installed on a volume without gamja.
 `DNCLIENT_VERSION` (default `latest`) is
 the dnclient version to download (e.g. `0.9.9`), looked up in
@@ -142,7 +146,9 @@ sojuctl user create -username bob -password <password>
 sojuctl user status
 ```
 
-`sojuctl` and `sojudb` already know where the config is (`/etc/soju/config`).
+`sojuctl` already knows where the config is (`/etc/soju/config`). soju-rs
+has no `sojudb`: the entrypoint creates the first admin with `sojuctl` over
+the admin socket once soju is up.
 
 ## Defined Networking
 
@@ -178,8 +184,8 @@ network, e.g. `fly proxy 8080` then `http://localhost:8080`.
 
 ## Updating
 
-- `fly deploy` rebuilds the image and picks up the latest soju from Alpine
-  edge and the latest `dnclient`. The DB and the dnclient enrollment live
+- `fly deploy` rebuilds the image and picks up the latest soju-rs release
+  and the latest `dnclient`. The DB and the dnclient enrollment live
   on the volume and survive it. soju migrates its schema itself on startup.
 - gamja is updated from a shell, not by a new image:
 
@@ -255,6 +261,8 @@ dnclient's tun interface.
 
 [Fly.io]: https://fly.io/
 [soju]: https://soju.im/
+[soju-rs]: https://github.com/pbtrung/soju-rs
+[soju-rs releases]: https://github.com/pbtrung/soju-rs/releases
 [gamja]: https://codeberg.org/emersion/gamja
 [pbtrung/gamja]: https://github.com/pbtrung/gamja
 [dnclient]: https://docs.defined.net/glossary/dnclient/

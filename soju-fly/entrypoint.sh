@@ -106,11 +106,24 @@ chmod 644 "$SOJU_CONF"
 printf "soju config:\n"
 sed 's/^/  /' "$SOJU_CONF"
 
-# Bootstrap the first admin user on an empty database.
+# Bootstrap the first admin user on an empty database. soju-rs has no
+# sojudb: once soju is up (exec'd below), create the user with sojuctl over
+# the admin socket from a background job.
 if [ -n "$SOJU_ADMIN_USER" ] && [ -n "$SOJU_ADMIN_PASSWORD" ] && [ ! -f "$SOJU_DATA_DIR/main.db" ]; then
-  printf "Creating admin user %s\n" "$SOJU_ADMIN_USER"
-  printf "%s\n" "$SOJU_ADMIN_PASSWORD" |
-    su-exec soju sojudb -config "$SOJU_CONF" create-user "$SOJU_ADMIN_USER" -admin
+  (
+    i=0
+    while [ ! -S /run/soju/admin ]; do
+      i=$((i + 1))
+      if [ "$i" -gt 30 ]; then
+        printf "soju didn't open /run/soju/admin, admin user not created\n"
+        exit 1
+      fi
+      sleep 1
+    done
+    printf "Creating admin user %s\n" "$SOJU_ADMIN_USER"
+    su-exec soju sojuctl -config "$SOJU_CONF" user create \
+      -username "$SOJU_ADMIN_USER" -password "$SOJU_ADMIN_PASSWORD" -admin
+  ) &
 fi
 
 # gamja config, served at /config.json.

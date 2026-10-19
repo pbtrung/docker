@@ -1,6 +1,7 @@
 FROM alpine:edge AS builder
 
 ARG GAMJA_REF=latest
+ARG SOJU_REF=latest
 ARG DNCLIENT_VERSION=latest
 ARG TARGETARCH=amd64
 
@@ -20,6 +21,30 @@ RUN mkdir -p /out && \
     chmod +x /out/dnclient && \
     /out/dnclient -version
 
+# soju: static musl build from a pbtrung/soju-rs release (the latest one by
+# default), checked against the release's SHA256SUMS
+RUN case "${TARGETARCH}" in \
+      amd64) arch=x86_64 ;; \
+      arm64) arch=aarch64 ;; \
+      *) echo "Unsupported architecture ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    if [ "${SOJU_REF}" = latest ]; then \
+      api=https://api.github.com/repos/pbtrung/soju-rs/releases/latest; \
+    else \
+      api="https://api.github.com/repos/pbtrung/soju-rs/releases/tags/${SOJU_REF}"; \
+    fi && \
+    tag="$(wget -q -O - "$api" | jq -er .tag_name)" && \
+    name="soju-rs-${tag}-${arch}-unknown-linux-musl" && \
+    base="https://github.com/pbtrung/soju-rs/releases/download/${tag}" && \
+    mkdir -p /tmp/soju /out/soju && cd /tmp/soju && \
+    echo "Downloading $base/$name.tar.gz" && \
+    wget -q "$base/$name.tar.gz" "$base/SHA256SUMS" && \
+    grep " $name.tar.gz\$" SHA256SUMS | sha256sum -c - && \
+    tar -xzf "$name.tar.gz" && \
+    cp "$name/soju" "$name/sojuctl" "$name/LICENSE" /out/soju/ && \
+    printf "%s\n" "$tag" >/out/soju/.version && \
+    /out/soju/soju -help 2>&1 | grep -q "^Usage of soju"
+
 # gamja: prebuilt release from pbtrung/gamja, seeded into /data/gamja on
 # first start
 COPY update-gamja.sh /usr/local/bin/
@@ -27,23 +52,24 @@ RUN GAMJA_DATA_DIR=/out/gamja update-gamja.sh "${GAMJA_REF}"
 
 FROM alpine:edge
 
-# Create the soju user (uid 1000) before installing the package, so the
-# package's install script reuses it instead of adding a system user.
 RUN addgroup -g 1000 soju && \
     adduser -u 1000 -G soju -D soju
 
-# soju from the Alpine package: its sojuctl/sojudb default to
-# /etc/soju/config and the admin socket /run/soju/admin, so they work
-# without flags inside the container shell.
 # rclone: copy backups off the machine from a shell.
 # sqlite: inspect the soju DB and take consistent backups from a shell.
 RUN apk update && \
     apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata mailcap nginx su-exec soju \
+    apk --no-cache add ca-certificates tzdata mailcap nginx su-exec \
       rclone sqlite
 
 COPY --from=builder /out/gamja /usr/share/gamja-dist
 COPY --from=builder /out/dnclient /usr/local/bin/dnclient
+# soju-rs binaries have no built-in config path: the soju and sojuctl
+# wrappers in /usr/local/bin pass -config /etc/soju/config, so sojuctl works
+# without flags inside the container shell.
+COPY --from=builder /out/soju /usr/local/lib/soju
+COPY soju-wrapper.sh /usr/local/bin/soju
+COPY soju-wrapper.sh /usr/local/bin/sojuctl
 
 # dnclient keeps its enrollment on the volume instead of /var/lib/defined,
 # so restarts and redeploys don't enroll the host again. Set in the image
