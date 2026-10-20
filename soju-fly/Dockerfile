@@ -81,7 +81,6 @@ WORKDIR /script
 COPY entrypoint.sh /script/
 COPY nginx.conf /script/nginx.conf
 COPY update-gamja.sh /usr/local/bin/update-gamja.sh
-COPY prune-messages.sh /usr/local/bin/prune-messages.sh
 
 # 8080: nginx (gamja + WebSocket), 6667: soju plain IRC. fly.toml exposes
 # neither publicly: both are only reachable over the Defined Networking

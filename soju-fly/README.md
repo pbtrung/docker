@@ -52,7 +52,6 @@ Fly settings (`fly.toml`): app `soju-ndq0bn8tgjuyd`, region `iad`, one
 | `soju-wrapper.sh` | Installed as `soju` and `sojuctl`: runs the soju-rs binary with `-config /etc/soju/config` |
 | `entrypoint.sh`   | Installs gamja on the volume, starts dnclient (enrolling it once), writes the soju config from env vars, creates the first admin, starts nginx then soju |
 | `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` |
-| `prune-messages.sh` | Deletes messages older than N days from the soju DB, then vacuums it |
 | `nginx.conf`      | Serves gamja, proxies `/socket`, `/healthz`, rate limits |
 
 ## Environment variables
@@ -214,23 +213,11 @@ fly ssh sftp get /tmp/main.db main.db
 `sqlite3` also lets you inspect the DB from a shell, e.g.
 `sqlite3 -readonly /data/soju/main.db '.tables'`.
 
-## Prune old messages
+## Message expiry
 
 soju deletes messages older than `SOJU_MESSAGE_EXPIRY` (5 days by default)
 on startup and then daily, and vacuums the DB to give the space back to the
-volume. To prune further by hand, e.g. after lowering the expiry, delete the
-messages older than a number of days, in every network and channel, and
-then `VACUUM` the DB:
-
-```sh
-fly ssh console -C 'prune-messages.sh /data/soju/main.db 20'
-```
-
-It can run while soju is up: it waits for soju's locks, and runs
-`sqlite3` as the DB's owner so no root-owned `-wal`/`-shm` files are left
-behind. Channels and their pinned/muted state are kept; only the messages
-go, and the search index is updated with them. `VACUUM` briefly needs
-about the DB's size again in free space on the volume.
+volume.
 
 ## Run locally
 
