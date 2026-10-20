@@ -1,5 +1,8 @@
 FROM alpine:edge AS builder
 
+# Fail a RUN when any command of a pipe fails, not just the last one
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
+
 ARG GAMJA_REF=latest
 ARG SOJU_REF=latest
 ARG DNCLIENT_VERSION=latest
@@ -9,11 +12,16 @@ RUN apk update && \
     apk --no-cache upgrade && \
     apk --no-cache add jq
 
+# Release metadata is fetched with ADD, which downloads it on every build:
+# when it changes (e.g. a new release), the cached layers below are rebuilt.
+# Fetching it in RUN would reuse the first build's "latest" forever, since
+# RUN layers are cached by command, not by what the command downloads.
+
 # dnclient: static binary from Defined Networking's downloads
 # (https://www.defined.net/downloads/). The API lists each version's URLs,
 # plus "latest".
+ADD https://api.defined.net/v1/downloads /tmp/dn-downloads.json
 RUN mkdir -p /out && \
-    wget -q -O /tmp/dn-downloads.json https://api.defined.net/v1/downloads && \
     url="$(jq -er --arg v "${DNCLIENT_VERSION}" --arg p "linux-${TARGETARCH}" \
       '.data.dnclient[$v][$p]' /tmp/dn-downloads.json)" && \
     echo "Downloading $url" && \
@@ -23,30 +31,34 @@ RUN mkdir -p /out && \
 
 # soju: static musl build from a pbtrung/soju-rs release (the latest one by
 # default), checked against the release's SHA256SUMS
+ADD https://api.github.com/repos/pbtrung/soju-rs/releases/latest /tmp/soju-latest.json
+WORKDIR /tmp/soju
 RUN case "${TARGETARCH}" in \
       amd64) arch=x86_64 ;; \
       arm64) arch=aarch64 ;; \
       *) echo "Unsupported architecture ${TARGETARCH}" >&2; exit 1 ;; \
     esac && \
     if [ "${SOJU_REF}" = latest ]; then \
-      api=https://api.github.com/repos/pbtrung/soju-rs/releases/latest; \
+      tag="$(jq -er .tag_name /tmp/soju-latest.json)"; \
     else \
-      api="https://api.github.com/repos/pbtrung/soju-rs/releases/tags/${SOJU_REF}"; \
+      tag="$(wget -q -O - "https://api.github.com/repos/pbtrung/soju-rs/releases/tags/${SOJU_REF}" | \
+        jq -er .tag_name)"; \
     fi && \
-    tag="$(wget -q -O - "$api" | jq -er .tag_name)" && \
     name="soju-rs-${tag}-${arch}-unknown-linux-musl" && \
     base="https://github.com/pbtrung/soju-rs/releases/download/${tag}" && \
-    mkdir -p /tmp/soju /out/soju && cd /tmp/soju && \
+    mkdir -p /out/soju && \
     echo "Downloading $base/$name.tar.gz" && \
     wget -q "$base/$name.tar.gz" "$base/SHA256SUMS" && \
     grep " $name.tar.gz\$" SHA256SUMS | sha256sum -c - && \
     tar -xzf "$name.tar.gz" && \
     cp "$name/soju" "$name/sojuctl" "$name/LICENSE" /out/soju/ && \
     printf "%s\n" "$tag" >/out/soju/.version && \
-    /out/soju/soju -help 2>&1 | grep -q "^Usage of soju"
+    { /out/soju/soju -help 2>&1 || true; } | grep -q "^Usage of soju"
 
 # gamja: prebuilt release from pbtrung/gamja, seeded into /data/gamja on
-# first start
+# first start. The metadata only invalidates the cache: update-gamja.sh
+# fetches it again.
+ADD https://api.github.com/repos/pbtrung/gamja/releases/latest /tmp/gamja-latest.json
 COPY update-gamja.sh /usr/local/bin/
 RUN GAMJA_DATA_DIR=/out/gamja update-gamja.sh "${GAMJA_REF}"
 

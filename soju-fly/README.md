@@ -83,6 +83,12 @@ bundled in the image, only installed on a volume without gamja.
 the dnclient version to download (e.g. `0.9.9`), looked up in
 `https://api.defined.net/v1/downloads`.
 
+The release metadata (GitHub's latest soju-rs and gamja releases, and the
+dnclient downloads) is fetched with `ADD` on every build, so a new release
+invalidates the cached download layers: "latest" really is the latest, even
+with the build cache. The startup log shows the soju-rs version running
+(`Starting soju-rs vX`).
+
 ## Deploy
 
 Run these from this directory (`soju-fly/`), logged in with `fly auth login`.
@@ -185,7 +191,8 @@ network, e.g. `fly proxy 8080` then `http://localhost:8080`.
 ## Updating
 
 - `fly deploy` rebuilds the image and picks up the latest soju-rs release
-  and the latest `dnclient`. The DB and the dnclient enrollment live
+  and the latest `dnclient` (check `Starting soju-rs vX` in `fly logs`).
+  The DB and the dnclient enrollment live
   on the volume and survive it. soju migrates its schema itself on startup.
 - gamja is updated from a shell, not by a new image:
 
