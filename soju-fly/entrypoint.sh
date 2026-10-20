@@ -89,6 +89,9 @@ else
   {
     printf "db sqlite3 %s/main.db\n" "$SOJU_DATA_DIR"
     printf "message-store db\n"
+    # Delete messages older than this on startup, then daily; soju-rs
+    # vacuums the DB afterwards. "0d" keeps messages forever.
+    printf "message-expiry %s\n" "${SOJU_MESSAGE_EXPIRY:-5d}"
     # Plain IRC: fly.toml exposes nothing, so only Defined Networking
     # and Fly's private network (6PN) can reach it
     printf "listen irc+insecure://[::]:6667\n"

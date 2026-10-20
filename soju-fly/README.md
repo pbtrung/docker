@@ -69,6 +69,7 @@ Set plain values under `[env]` in `fly.toml`, and secrets with
 | `SOJU_TITLE`          | —                                           | Server title shown to clients |
 | `SOJU_ADMIN_USER`     | —                                           | Admin user created on first start (only while `/data/soju/main.db` doesn't exist) |
 | `SOJU_ADMIN_PASSWORD` | —                                           | Password for that admin user. **Secret** |
+| `SOJU_MESSAGE_EXPIRY` | `5d`                                        | Delete messages older than this (`<n>d`), on startup then daily, and vacuum the DB. `0d` keeps them forever |
 | `SOJU_EXTRA_CONFIG`   | —                                           | Extra soju config lines appended as-is (e.g. `max-user-networks 5`) |
 | `SOJU_CONFIG_FILE`    | —                                           | Path to a complete soju config. If set, the env vars above that build the config are ignored |
 | `GAMJA_CONFIG_JSON`   | `{"server":{"auth":"mandatory","ping":30}}` | gamja [config file] contents, served at `/config.json` |
@@ -76,7 +77,7 @@ Set plain values under `[env]` in `fly.toml`, and secrets with
 | `GAMJA_DATA_DIR`      | `/data/gamja`                               | Where gamja is installed; `update-gamja.sh` is copied to its parent directory |
 
 Build arguments: `SOJU_REF` (default `latest`) selects the
-[soju-rs release][soju-rs releases] to install (e.g. `v0.99.0`).
+[soju-rs release][soju-rs releases] to install (e.g. `v0.99.2`).
 `GAMJA_REF` (default `latest`) selects the gamja release
 bundled in the image, only installed on a volume without gamja.
 `DNCLIENT_VERSION` (default `latest`) is
@@ -215,9 +216,11 @@ fly ssh sftp get /tmp/main.db main.db
 
 ## Prune old messages
 
-soju keeps every message forever (`message-store db`). To delete the
+soju deletes messages older than `SOJU_MESSAGE_EXPIRY` (5 days by default)
+on startup and then daily, and vacuums the DB to give the space back to the
+volume. To prune further by hand, e.g. after lowering the expiry, delete the
 messages older than a number of days, in every network and channel, and
-then `VACUUM` the DB to give the space back to the volume:
+then `VACUUM` the DB:
 
 ```sh
 fly ssh console -C 'prune-messages.sh /data/soju/main.db 20'
