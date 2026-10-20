@@ -138,4 +138,7 @@ NGINX_CONF="${NGINX_CONF:-/script/nginx.conf}"
 printf "Starting nginx with config: %s\n" "$NGINX_CONF"
 nginx -c "$NGINX_CONF"
 
+# soju-rs releases before v0.99.7 have no -version: don't let set -e stop
+# the container for it
+printf "Starting %s\n" "$(soju -version 2>/dev/null || echo "soju-rs (unknown version)")"
 exec su-exec soju soju -config "$SOJU_CONF"
