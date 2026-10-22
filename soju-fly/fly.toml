@@ -9,9 +9,8 @@ primary_region = 'iad'
 #   instances; deploy with --ha=false so the first deploy creates one
 #   machine, not two, and check with `fly scale show` (`fly scale count 1`)
 # - [[restart]] brings it back whenever soju exits or the machine crashes
-# gamja (8080) and IRC (6667) are only reachable through the Cloudflare
-# Tunnel (cloudflared connects out, set CLOUDFLARED_TOKEN with
-# `fly secrets set`) and Fly's private network.
+# gamja (8080) and IRC (6667) are only reachable over Defined Networking
+# (Nebula) and Fly's private network.
 
 # soju shuts down cleanly on SIGTERM: it closes the upstream connections
 # and flushes the DB
@@ -29,7 +28,7 @@ swap_size_mb = 512
 [deploy]
   strategy = 'immediate'
 
-# soju DB and gamja
+# soju DB, gamja and the dnclient enrollment
 [mounts]
   source = 'soju_data'
   destination = '/data'
