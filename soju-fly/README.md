@@ -7,23 +7,24 @@ The [soju-nf](../soju-nf) image adapted for [Fly.io]. It runs:
 - [gamja] — IRC web client, prebuilt release from the [pbtrung/gamja] fork,
   kept on the volume so it can be updated from a shell
 - nginx — serves gamja and proxies the IRC WebSocket (`/socket`) to soju
-- [dnclient] — joins the machine to a [Defined Networking] (Managed Nebula)
-  network. It replaces cloudflared, which soju-nf uses.
+- [cloudflared] — runs a remotely managed [Cloudflare Tunnel], from Alpine
+  edge's `testing` repository
 
-Nothing is exposed publicly: `fly.toml` has no service, so the Fly proxy
-doesn't route any traffic to the machine. gamja and soju's plain IRC port are
-only reachable from hosts on your Defined network (and from Fly's
-private network).
+Nothing is exposed publicly by Fly: `fly.toml` has no service, so the Fly
+proxy doesn't route any traffic to the machine. cloudflared connects out to
+Cloudflare, and the tunnel's routes (set in the Cloudflare dashboard) are
+the way in. gamja and soju's plain IRC port are also reachable from Fly's
+private network.
 
 File uploads (IRCv3 filehost) are disabled: soju-rs doesn't support them
 and nginx doesn't proxy `/uploads`.
 
 ```
-browser ───Nebula──▶ <nebula-ip>:8080 nginx ─┬─ /            gamja static files
-                                             ├─ /config.json  gamja config
-                                             ├─ /socket       ─▶ soju 127.0.0.1:8081 (WebSocket)
-                                             └─ /healthz      200 ok (Fly health check)
-IRC client ─Nebula──▶ <nebula-ip>:6667 soju plain IRC
+browser ──▶ Cloudflare ──▶ cloudflared ──▶ localhost:8080 nginx ─┬─ /            gamja static files
+                                                                ├─ /config.json  gamja config
+                                                                ├─ /socket       ─▶ soju 127.0.0.1:8081 (WebSocket)
+                                                                └─ /healthz      200 ok (Fly health check)
+IRC client ─▶ Cloudflare ──▶ cloudflared ──▶ localhost:6667 soju plain IRC
 ```
 
 Both ports also listen on Fly's private network (6PN), e.g.
@@ -38,8 +39,6 @@ Fly settings (`fly.toml`): app `soju-ndq0bn8tgjuyd`, region `iad`, one
 /data/
 ├── soju/main.db                 SQLite DB (SOJU_DATA_DIR)
 ├── gamja/                       gamja web client (GAMJA_DATA_DIR)
-├── defined/                     dnclient state (DNCLIENT_STATE_DIR)
-│   └── dnclient.yml             enrollment: host keys and Nebula config
 └── update-gamja.sh              gamja updater, copied on every start
 ```
 
@@ -48,11 +47,11 @@ Fly settings (`fly.toml`): app `soju-ndq0bn8tgjuyd`, region `iad`, one
 | File              | Purpose |
 | ----------------- | ------- |
 | `fly.toml`        | Fly app config: no public service, `/healthz` check, volume, VM size |
-| `Dockerfile`      | `builder` stage downloads a soju-rs release (checked against its `SHA256SUMS`), a gamja release and a `dnclient` release from Defined Networking's [downloads]; runtime stage on alpine:edge installs nginx, rclone and sqlite with `apk` |
+| `Dockerfile`      | `builder` stage downloads a soju-rs release (checked against its `SHA256SUMS`), and a gamja release; runtime stage on alpine:edge installs nginx, rclone and sqlite with `apk`, and cloudflared from `edge/testing` |
 | `soju-wrapper.sh` | Installed as `soju` and `sojuctl`: runs the soju-rs binary with `-config /etc/soju/config` |
-| `entrypoint.sh`   | Installs gamja on the volume, starts dnclient (enrolling it once), writes the soju config from env vars, creates the first admin, starts nginx then soju |
+| `entrypoint.sh`   | Installs gamja on the volume, writes the soju config from env vars, creates the first admin, starts cloudflared, nginx then soju |
 | `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` |
-| `nginx.conf`      | Serves gamja, proxies `/socket`, `/healthz`, rate limits |
+| `nginx.conf`      | Serves gamja, proxies `/socket`, `/healthz`, client IP from cloudflared, rate limits |
 
 ## Environment variables
 
@@ -61,9 +60,7 @@ Set plain values under `[env]` in `fly.toml`, and secrets with
 
 | Variable              | Default                                     | Description |
 | --------------------- | ------------------------------------------- | ----------- |
-| `DN_ENROLLMENT_CODE`  | —                                           | Defined Networking enrollment code. **Secret.** Used only while `$DNCLIENT_STATE_DIR/dnclient.yml` doesn't exist |
-| `DN_API_SERVER`       | `https://api.defined.net`                   | Defined Networking API server |
-| `DNCLIENT_STATE_DIR`  | `/data/defined`                             | Where dnclient keeps its enrollment (instead of `/var/lib/defined`) |
+| `CLOUDFLARED_TOKEN`   | —                                           | Cloudflare Tunnel token. **Secret.** If set, runs cloudflared |
 | `SOJU_HOSTNAME`       | `soju`                                      | Server name shown to clients (gamja: "Connected to soju") |
 | `SOJU_TITLE`          | —                                           | Server title shown to clients |
 | `SOJU_ADMIN_USER`     | —                                           | Admin user created on first start (only while `/data/soju/main.db` doesn't exist) |
@@ -79,14 +76,11 @@ Build arguments: `SOJU_REF` (default `latest`) selects the
 [soju-rs release][soju-rs releases] to install (e.g. `v0.99.2`).
 `GAMJA_REF` (default `latest`) selects the gamja release
 bundled in the image, only installed on a volume without gamja.
-`DNCLIENT_VERSION` (default `latest`) is
-the dnclient version to download (e.g. `0.9.9`), looked up in
-`https://api.defined.net/v1/downloads`.
 
 The release metadata (GitHub's latest soju-rs and gamja releases, and the
-dnclient downloads) is fetched with `ADD` on every build, so a new release
-invalidates the cached download layers: "latest" really is the latest, even
-with the build cache. The startup log shows the soju-rs version running
+`edge/testing` package index for cloudflared) is fetched with `ADD` on every
+build, so a new release invalidates the cached download layers: "latest"
+really is the latest, even with the build cache. The startup log shows the soju-rs version running
 (`Starting soju-rs vX`).
 
 ## Deploy
@@ -102,7 +96,7 @@ fly volumes create soju_data --region iad --size 1 -a soju-ndq0bn8tgjuyd
 fly secrets set -a soju-ndq0bn8tgjuyd --stage \
   SOJU_ADMIN_USER=admin \
   SOJU_ADMIN_PASSWORD='<a strong password>'
-printf 'DN_ENROLLMENT_CODE=%s\n' '<enrollment code>' |
+printf 'CLOUDFLARED_TOKEN=%s\n' "$(cat token.txt)" |
   fly secrets import -a soju-ndq0bn8tgjuyd --stage
 
 # 3. Build and deploy a single machine
@@ -110,8 +104,9 @@ fly deploy --ha=false
 ```
 
 `--stage` stores the secrets without restarting anything; the first deploy
-picks them up. `fly secrets import` reads the code from standard input,
-so it stays out of your shell history and process list.
+picks them up. Put the tunnel token in `token.txt` in this directory
+(ignored by git and the Docker build). `fly secrets import` reads it from
+standard input, so it stays out of your shell history and process list.
 
 Keep a single machine: the volume can only attach to one, and soju
 can't run as several instances. To check, run `fly scale show`. If
@@ -128,8 +123,8 @@ downloads releases.
 
 ### Log in
 
-From a host on your Defined network, open `http://<nebula-ip>:8080` (see
-[Defined Networking](#defined-networking)). gamja loads. Log in with
+Open the hostname you routed to `http://localhost:8080` (see
+[Cloudflare Tunnel](#cloudflare-tunnel)). gamja loads. Log in with
 `SOJU_ADMIN_USER` / `SOJU_ADMIN_PASSWORD`, then add an upstream network,
 either in gamja's "add network" UI or with `BouncerServ`:
 
@@ -156,44 +151,48 @@ sojuctl user status
 has no `sojudb`: the entrypoint creates the first admin with `sojuctl` over
 the admin socket once soju is up.
 
-## Defined Networking
+## Cloudflare Tunnel
 
-With `DN_ENROLLMENT_CODE` set, the entrypoint starts `dnclient run` in the
-background and, on the first start only, enrolls the host with
-`dnclient enroll -code`. dnclient's state lives in `/data/defined` (set with
-`DNCLIENT_STATE_DIR` in the image) rather than its usual `/var/lib/defined`,
-so it survives restarts and redeploys. Once `/data/defined/dnclient.yml`
-exists, the code isn't used again: later starts only run the daemon, and
-you can remove the secret with `fly secrets unset DN_ENROLLMENT_CODE`.
+With `CLOUDFLARED_TOKEN` set, the entrypoint runs
+`cloudflared tunnel --no-autoupdate run` in the background as the `soju`
+user, passing the token in `TUNNEL_TOKEN` so it stays out of the process
+list. cloudflared only makes outbound connections to Cloudflare, so the app
+still needs no Fly service or public IP. Its logs appear in `fly logs`. If
+cloudflared exits for any reason (bad token, crash), soju is stopped too and
+Fly restarts the machine, so it never keeps running without its tunnel.
 
-1. In the [Defined Networking admin panel][dn admin], add a host and copy
-   its enrollment code (codes are single-use and expire).
-2. Store it as a secret (see [Deploy](#deploy)) and deploy. The logs show
-   `Enrolling with Defined Networking`; the host's Nebula IP is in the
-   admin panel, or `fly ssh console -C 'dnclient info'`.
-3. Allow ports 8080 and 6667 to the host in its role's firewall rules, then
-   connect from another host on the network to `<nebula-ip>:6667` or
-   `http://<nebula-ip>:8080`.
+1. In the Cloudflare Zero Trust dashboard, **Networks → Tunnels → Create a
+   tunnel**, type **Cloudflared**. Name it (e.g. `soju-fly`).
+2. Copy the token from the install command shown (the long string after
+   `--token`) and store it as a secret:
 
-If enrollment fails (a bad or used code), the machine fails to start and Fly
-restarts it. To enroll again (e.g. as another host), delete the state and
-set a new code:
+   ```sh
+   printf 'CLOUDFLARED_TOKEN=%s\n' "$(cat token.txt)" | fly secrets import  # restarts the machine
+   ```
 
-```sh
-fly ssh console -C 'rm -rf /data/defined'
-printf 'DN_ENROLLMENT_CODE=%s\n' '<new code>' | fly secrets import  # restarts the machine
-```
+   The tunnel shows as **Healthy** in the dashboard.
+3. Add **public hostname** routes to the tunnel, for example:
+   - `chat.example.org` → `http://localhost:8080` for gamja. Put a
+     [Cloudflare Access] application in front of it if it shouldn't be
+     reachable by anyone (soju still asks for a password).
+   - `irc.example.org` → `tcp://localhost:6667` for native IRC clients. On
+     each client machine, run
+     `cloudflared access tcp --hostname irc.example.org --url localhost:6667`,
+     then point the IRC client at `localhost:6667`.
 
-Without `DN_ENROLLMENT_CODE` and without a saved `dnclient.yml`, dnclient
-isn't started. gamja and IRC are then only reachable from Fly's private
-network, e.g. `fly proxy 8080` then `http://localhost:8080`.
+The routes live in Cloudflare (a remotely managed tunnel), so changing them
+needs no redeploy. To use another tunnel, set a new `CLOUDFLARED_TOKEN`.
+
+Without `CLOUDFLARED_TOKEN`, cloudflared isn't started. gamja and IRC are
+then only reachable from Fly's private network, e.g. `fly proxy 8080` then
+`http://localhost:8080`.
 
 ## Updating
 
 - `fly deploy` rebuilds the image and picks up the latest soju-rs release
-  and the latest `dnclient` (check `Starting soju-rs vX` in `fly logs`).
-  The DB and the dnclient enrollment live
-  on the volume and survive it. soju migrates its schema itself on startup.
+  and the latest cloudflared package (check `Starting soju-rs vX` and
+  `Starting cloudflared X` in `fly logs`). The DB lives on the volume and
+  survives it. soju migrates its schema itself on startup.
 - gamja is updated from a shell, not by a new image:
 
   ```sh
@@ -231,20 +230,20 @@ volume.
 ```sh
 docker build -t soju-fly soju-fly/
 docker run --rm -p 8080:8080 -v soju-data:/data \
-  --cap-add NET_ADMIN \
   -e SOJU_ADMIN_USER=admin -e SOJU_ADMIN_PASSWORD=changeme \
-  -e DN_ENROLLMENT_CODE=... \
   soju-fly
 ```
 
-`--cap-add NET_ADMIN` is only needed with `DN_ENROLLMENT_CODE`, for
-dnclient's tun interface.
+Then open http://localhost:8080. Add `-e CLOUDFLARED_TOKEN=...` to run the
+tunnel too.
 
 ## Notes
 
-- nginx sees clients' own Nebula IPs and forwards them to soju as a
-  single `X-Forwarded-For` address, which soju trusts from loopback
-  (`accept-proxy-ip localhost`). Rate limits apply per client.
+- nginx recovers the client IP from the `X-Forwarded-For` set by
+  cloudflared (`real_ip_*`, trusted from loopback only), so rate limits
+  apply per client, and forwards it to soju as a single address, which soju
+  trusts from loopback (`accept-proxy-ip localhost`). Clients coming through
+  a `tcp://` route show up as `127.0.0.1` in soju.
 - gamja sends `PING` every 30 s by default (`GAMJA_CONFIG_JSON`) to keep
   its WebSocket open through NAT along the way.
 - The machine never stops on its own: there's no service for the Fly proxy
@@ -253,8 +252,9 @@ dnclient's tun interface.
   (`strategy = 'immediate'`), sending soju `SIGTERM` with 30 s to shut
   down cleanly. 512 MB of swap keeps a memory spike from OOM-killing soju
   on the 256 MB VM.
-- gamja is served over plain HTTP. The Nebula tunnel encrypts the traffic
-  in transit.
+- gamja is served over plain HTTP to cloudflared. Cloudflare serves it
+  over HTTPS, and the tunnel encrypts the traffic between Cloudflare and
+  the machine.
 
 [Fly.io]: https://fly.io/
 [soju]: https://soju.im/
@@ -262,8 +262,7 @@ dnclient's tun interface.
 [soju-rs releases]: https://github.com/pbtrung/soju-rs/releases
 [gamja]: https://codeberg.org/emersion/gamja
 [pbtrung/gamja]: https://github.com/pbtrung/gamja
-[dnclient]: https://docs.defined.net/glossary/dnclient/
-[Defined Networking]: https://www.defined.net/
-[downloads]: https://www.defined.net/downloads/
-[dn admin]: https://admin.defined.net/
+[cloudflared]: https://github.com/cloudflare/cloudflared
+[Cloudflare Tunnel]: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+[Cloudflare Access]: https://developers.cloudflare.com/cloudflare-one/applications/
 [config file]: https://codeberg.org/emersion/gamja/src/branch/master/doc/config-file.md

@@ -2,7 +2,7 @@
 set -e
 
 # Persistent Fly volume, mounted at /data: the SQLite DB in /data/soju,
-# gamja in /data/gamja and the dnclient enrollment in /data/defined.
+# gamja in /data/gamja.
 SOJU_DATA_DIR="${SOJU_DATA_DIR:-/data/soju}"
 GAMJA_DATA_DIR="${GAMJA_DATA_DIR:-/data/gamja}"
 SOJU_CONF=/etc/soju/config
@@ -35,45 +35,6 @@ UPDATE_GAMJA="$(dirname "$GAMJA_DATA_DIR")/update-gamja.sh"
 cp /usr/local/bin/update-gamja.sh "$UPDATE_GAMJA"
 chmod +x "$UPDATE_GAMJA"
 
-# Defined Networking (Managed Nebula). dnclient keeps its state in
-# DNCLIENT_STATE_DIR (/data/defined, set in the Dockerfile) instead of
-# /var/lib/defined, so the host is enrolled once with DN_ENROLLMENT_CODE
-# and every later start reuses dnclient.yml: the code isn't used again.
-# Enrolling goes through the running daemon's control socket.
-DNCLIENT_STATE_DIR="${DNCLIENT_STATE_DIR:-/data/defined}"
-DNCLIENT_SOCKET_DIR="${DNCLIENT_SOCKET_DIR:-/run}"
-export DNCLIENT_STATE_DIR DNCLIENT_SOCKET_DIR
-if [ -n "$DN_ENROLLMENT_CODE" ] || [ -f "$DNCLIENT_STATE_DIR/dnclient.yml" ]; then
-  mkdir -p "$DNCLIENT_STATE_DIR"
-  chmod 700 "$DNCLIENT_STATE_DIR"
-  mkdir -p /dev/net
-  if [ ! -c /dev/net/tun ]; then
-    mknod /dev/net/tun c 10 200
-    chmod 600 /dev/net/tun
-  fi
-
-  printf "Starting dnclient with state in %s\n" "$DNCLIENT_STATE_DIR"
-  dnclient run -server "${DN_API_SERVER:-https://api.defined.net}" &
-  i=0
-  while [ ! -S "$DNCLIENT_SOCKET_DIR/dnclient.sock" ]; do
-    i=$((i + 1))
-    if [ "$i" -gt 10 ]; then
-      printf "dnclient didn't open %s/dnclient.sock\n" "$DNCLIENT_SOCKET_DIR"
-      exit 1
-    fi
-    sleep 1
-  done
-
-  if [ ! -f "$DNCLIENT_STATE_DIR/dnclient.yml" ]; then
-    printf "Enrolling with Defined Networking\n"
-    dnclient enroll -code "$DN_ENROLLMENT_CODE"
-  else
-    printf "Already enrolled with Defined Networking, not enrolling again\n"
-  fi
-else
-  printf "DN_ENROLLMENT_CODE not set, skipping dnclient\n"
-fi
-
 # soju config: use SOJU_CONFIG_FILE as-is if given, otherwise render one
 # from environment variables.
 if [ -n "$SOJU_CONFIG_FILE" ]; then
@@ -92,7 +53,7 @@ else
     # Delete messages older than this on startup, then daily; soju-rs
     # vacuums the DB afterwards. "0d" keeps messages forever.
     printf "message-expiry %s\n" "${SOJU_MESSAGE_EXPIRY:-5d}"
-    # Plain IRC: fly.toml exposes nothing, so only Defined Networking
+    # Plain IRC: fly.toml exposes nothing, so only cloudflared (loopback)
     # and Fly's private network (6PN) can reach it
     printf "listen irc+insecure://[::]:6667\n"
     printf "listen http+insecure://127.0.0.1:8081\n"
@@ -133,6 +94,29 @@ fi
 # Default: always ask for a password, PING every 30s so idle WebSockets
 # aren't dropped by NAT or proxies along the way.
 printf "%s\n" "${GAMJA_CONFIG_JSON:-{\"server\":{\"auth\":\"mandatory\",\"ping\":30\}\}}" >/tmp/gamja-config.json
+
+# Cloudflare Tunnel (remotely managed): routes such as tcp://localhost:6667
+# or http://localhost:8080 are configured in the Cloudflare dashboard.
+# cloudflared only makes outbound connections, so no inbound port is needed.
+# The token goes through TUNNEL_TOKEN rather than --token, so it doesn't
+# show up in the process list. If cloudflared exits, stop the machine (Fly
+# restarts it): this shell's PID becomes soju after the final exec (on Fly,
+# PID 1 is Fly's init, not this script), so wait for that, then SIGTERM it
+# so soju shuts down cleanly.
+if [ -n "$CLOUDFLARED_TOKEN" ]; then
+  printf "Starting cloudflared %s\n" "$(cloudflared --version | awk '{print $3}')"
+  main_pid=$$
+  (
+    status=0
+    TUNNEL_TOKEN="$CLOUDFLARED_TOKEN" su-exec soju cloudflared tunnel \
+      --no-autoupdate --loglevel info run || status=$?
+    printf "cloudflared exited with status %s, stopping machine\n" "$status"
+    while [ "$(cat "/proc/$main_pid/comm")" != soju ]; do sleep 1; done
+    kill -TERM "$main_pid"
+  ) &
+else
+  printf "CLOUDFLARED_TOKEN not set, skipping cloudflared\n"
+fi
 
 NGINX_CONF="${NGINX_CONF:-/script/nginx.conf}"
 printf "Starting nginx with config: %s\n" "$NGINX_CONF"
