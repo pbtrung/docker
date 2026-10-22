@@ -74,36 +74,14 @@ else
   printf "DN_ENROLLMENT_CODE not set, skipping dnclient\n"
 fi
 
-# soju config: use SOJU_CONFIG_FILE as-is if given, otherwise render one
-# from environment variables.
+# soju config: soju.conf is baked into the image as $SOJU_CONF. Use
+# SOJU_CONFIG_FILE instead if given.
 if [ -n "$SOJU_CONFIG_FILE" ]; then
   if [ ! -f "$SOJU_CONFIG_FILE" ]; then
     printf "SOJU_CONFIG_FILE %s does not exist\n" "$SOJU_CONFIG_FILE"
     exit 1
   fi
   cp "$SOJU_CONFIG_FILE" "$SOJU_CONF"
-else
-  # Server name shown to clients (gamja: "Connected to soju"). Without it,
-  # soju would use the container hostname, i.e. the Fly machine ID.
-  SOJU_HOSTNAME="${SOJU_HOSTNAME:-soju}"
-  {
-    printf "db sqlite3 %s/main.db\n" "$SOJU_DATA_DIR"
-    printf "message-store db\n"
-    # Delete messages older than this on startup, then daily; soju-rs
-    # vacuums the DB afterwards. "0d" keeps messages forever.
-    printf "message-expiry %s\n" "${SOJU_MESSAGE_EXPIRY:-5d}"
-    # Plain IRC: fly.toml exposes nothing, so only Defined Networking
-    # and Fly's private network (6PN) can reach it
-    printf "listen irc+insecure://[::]:6667\n"
-    printf "listen http+insecure://127.0.0.1:8081\n"
-    printf "listen unix+admin:///run/soju/admin\n"
-    # nginx forwards X-Forwarded-For from loopback
-    printf "accept-proxy-ip localhost\n"
-    printf "hostname %s\n" "$SOJU_HOSTNAME"
-    [ -n "$SOJU_TITLE" ] && printf "title %s\n" "$SOJU_TITLE"
-    [ -n "$SOJU_EXTRA_CONFIG" ] && printf "%s\n" "$SOJU_EXTRA_CONFIG"
-    true
-  } >"$SOJU_CONF"
 fi
 chmod 644 "$SOJU_CONF"
 printf "soju config:\n"

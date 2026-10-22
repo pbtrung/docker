@@ -49,8 +49,9 @@ Fly settings (`fly.toml`): app `soju-ndq0bn8tgjuyd`, region `iad`, one
 | ----------------- | ------- |
 | `fly.toml`        | Fly app config: no public service, `/healthz` check, volume, VM size |
 | `Dockerfile`      | `builder` stage downloads a soju-rs release (checked against its `SHA256SUMS`), a gamja release and a `dnclient` release from Defined Networking's [downloads]; runtime stage on alpine:edge installs nginx, rclone and sqlite with `apk` |
+| `soju.conf`       | soju config, installed as `/etc/soju/config`: DB, message expiry, `chathistory-limit`, listeners, hostname |
 | `soju-wrapper.sh` | Installed as `soju` and `sojuctl`: runs the soju-rs binary with `-config /etc/soju/config` |
-| `entrypoint.sh`   | Installs gamja on the volume, starts dnclient (enrolling it once), writes the soju config from env vars, creates the first admin, starts nginx then soju |
+| `entrypoint.sh`   | Installs gamja on the volume, starts dnclient (enrolling it once), uses `SOJU_CONFIG_FILE` as the soju config if set, creates the first admin, starts nginx then soju |
 | `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` |
 | `nginx.conf`      | Serves gamja, proxies `/socket`, `/healthz`, rate limits |
 
@@ -64,15 +65,11 @@ Set plain values under `[env]` in `fly.toml`, and secrets with
 | `DN_ENROLLMENT_CODE`  | —                                           | Defined Networking enrollment code. **Secret.** Used only while `$DNCLIENT_STATE_DIR/dnclient.yml` doesn't exist |
 | `DN_API_SERVER`       | `https://api.defined.net`                   | Defined Networking API server |
 | `DNCLIENT_STATE_DIR`  | `/data/defined`                             | Where dnclient keeps its enrollment (instead of `/var/lib/defined`) |
-| `SOJU_HOSTNAME`       | `soju`                                      | Server name shown to clients (gamja: "Connected to soju") |
-| `SOJU_TITLE`          | —                                           | Server title shown to clients |
 | `SOJU_ADMIN_USER`     | —                                           | Admin user created on first start (only while `/data/soju/main.db` doesn't exist) |
 | `SOJU_ADMIN_PASSWORD` | —                                           | Password for that admin user. **Secret** |
-| `SOJU_MESSAGE_EXPIRY` | `5d`                                        | Delete messages older than this (`<n>d`), on startup then daily, and vacuum the DB. `0d` keeps them forever |
-| `SOJU_EXTRA_CONFIG`   | —                                           | Extra soju config lines appended as-is (e.g. `max-user-networks 5`) |
-| `SOJU_CONFIG_FILE`    | —                                           | Path to a complete soju config. If set, the env vars above that build the config are ignored |
+| `SOJU_CONFIG_FILE`    | —                                           | Path to a complete soju config to use instead of the bundled `soju.conf` |
 | `GAMJA_CONFIG_JSON`   | `{"server":{"auth":"mandatory","ping":30}}` | gamja [config file] contents, served at `/config.json` |
-| `SOJU_DATA_DIR`       | `/data/soju`                                | Where the soju DB (`main.db`) is stored |
+| `SOJU_DATA_DIR`       | `/data/soju`                                | Where the soju DB (`main.db`) is stored. Must match the `db` path of the soju config |
 | `GAMJA_DATA_DIR`      | `/data/gamja`                               | Where gamja is installed; `update-gamja.sh` is copied to its parent directory |
 
 Build arguments: `SOJU_REF` (default `latest`) selects the
@@ -222,9 +219,16 @@ fly ssh sftp get /tmp/main.db main.db
 
 ## Message expiry
 
-soju deletes messages older than `SOJU_MESSAGE_EXPIRY` (5 days by default)
+soju deletes messages older than `message-expiry` in `soju.conf` (5 days)
 on startup and then daily, and vacuums the DB to give the space back to the
 volume.
+
+## History limit
+
+`chathistory-limit 200` in `soju.conf` caps each CHATHISTORY reply at 200
+messages: gamja loads the latest 200 lines of each buffer on connect (its
+default), and fetches older or missed messages in more requests. This keeps
+soju's memory down on the 256 MB machine while gamja loads every buffer.
 
 ## Run locally
 

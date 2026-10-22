@@ -82,6 +82,7 @@ COPY --from=builder /out/dnclient /usr/local/bin/dnclient
 COPY --from=builder /out/soju /usr/local/lib/soju
 COPY soju-wrapper.sh /usr/local/bin/soju
 COPY soju-wrapper.sh /usr/local/bin/sojuctl
+COPY soju.conf /etc/soju/config
 
 # dnclient keeps its enrollment on the volume instead of /var/lib/defined,
 # so restarts and redeploys don't enroll the host again. Set in the image
