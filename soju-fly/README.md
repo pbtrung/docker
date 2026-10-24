@@ -33,10 +33,9 @@ IRC client ─6PN─▶ soju :6667 plain IRC
 ```
 
 Ports 8080 and 6667 listen on Fly's private network (6PN), e.g.
-`soju-ndq0bn8tgjuyd.internal:6667`, which `fly proxy` and `fly wireguard`
-can reach.
+`$FLY_APP.internal:6667`, which `fly proxy` and `fly wireguard` can reach.
 
-Fly settings (`fly.toml`): app `soju-ndq0bn8tgjuyd`, region `iad`, one
+Fly settings (`fly.toml`): app from `$FLY_APP` (see [App name](#app-name)), region `iad`, one
 `shared-cpu-1x` machine with 256 MB, one TCP service (443 → 8443), and a 1 GB volume
 `soju_data` at `/data`. It holds:
 
@@ -93,16 +92,38 @@ with the build cache. The startup log shows the soju-rs version running
 
 Run these from this directory (`soju-fly/`), logged in with `fly auth login`.
 
+### App name
+
+The app name is part of its `<app>.fly.dev` hostname, which reaches the app
+without going through Cloudflare, so it's kept out of the repo: `fly.toml`
+has no `app`, and flyctl reads the `FLY_APP` environment variable instead.
+Keep it in `.env` (ignored by git and Docker): `soju` and 38 random
+lowercase letters and digits, 42 characters in all:
+
 ```sh
-# 1. App and volume
-fly apps create soju-ndq0bn8tgjuyd
-fly volumes create soju_data --region iad --size 1 -a soju-ndq0bn8tgjuyd
+printf 'FLY_APP=soju%s\n' "$(LC_ALL=C tr -dc a-z0-9 </dev/urandom | head -c 38)" > .env
+```
+
+Load it in each shell before running `fly` commands:
+
+```sh
+export $(cat .env)            # fish, or bash/zsh
+```
+
+Without `FLY_APP`, `fly deploy` stops with an error rather than deploying
+somewhere else.
+
+```sh
+# 1. App, volume and a dedicated IPv6 (raw TCP needs a dedicated IP)
+fly apps create "$FLY_APP"
+fly volumes create soju_data --region iad --size 1
+fly ips allocate-v6
 
 # 2. Secrets
-fly secrets set -a soju-ndq0bn8tgjuyd --stage \
+fly secrets set --stage \
   SOJU_ADMIN_USER=admin \
   SOJU_ADMIN_PASSWORD='<a strong password>'
-fly secrets set -a soju-ndq0bn8tgjuyd --stage \
+fly secrets set --stage \
   ORIGIN_CERT="$(cat cert.pem)" \
   ORIGIN_KEY="$(cat key.pem)" \
   CF_AOP_CA="$(cat rootca.crt)"

@@ -3,3 +3,4 @@ token.txt
 *.crt
 *.key
 cf_token.txt
+.env

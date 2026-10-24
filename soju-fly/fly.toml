@@ -1,4 +1,6 @@
-app = 'soju-ndq0bn8tgjuyd'
+# The app name isn't in the repo: it's part of the app's fly.dev hostname,
+# which would let anyone reach the app without going through Cloudflare.
+# flyctl takes it from FLY_APP, kept in the git-ignored .env (see README).
 primary_region = 'iad'
 
 # soju is a bouncer: it must stay connected to the upstream IRC networks,
