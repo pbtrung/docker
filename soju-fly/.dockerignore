@@ -1,2 +1,5 @@
 token.txt
 *.txt
+*.pem
+*.crt
+*.key

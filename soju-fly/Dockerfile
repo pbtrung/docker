@@ -5,7 +5,6 @@ SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
 ARG GAMJA_REF=latest
 ARG SOJU_REF=latest
-ARG DNCLIENT_VERSION=latest
 ARG TARGETARCH=amd64
 
 RUN apk update && \
@@ -16,18 +15,6 @@ RUN apk update && \
 # when it changes (e.g. a new release), the cached layers below are rebuilt.
 # Fetching it in RUN would reuse the first build's "latest" forever, since
 # RUN layers are cached by command, not by what the command downloads.
-
-# dnclient: static binary from Defined Networking's downloads
-# (https://www.defined.net/downloads/). The API lists each version's URLs,
-# plus "latest".
-ADD https://api.defined.net/v1/downloads /tmp/dn-downloads.json
-RUN mkdir -p /out && \
-    url="$(jq -er --arg v "${DNCLIENT_VERSION}" --arg p "linux-${TARGETARCH}" \
-      '.data.dnclient[$v][$p]' /tmp/dn-downloads.json)" && \
-    echo "Downloading $url" && \
-    wget -q -O /out/dnclient "$url" && \
-    chmod +x /out/dnclient && \
-    /out/dnclient -version
 
 # soju: static musl build from a pbtrung/soju-rs release (the latest one by
 # default), checked against the release's SHA256SUMS
@@ -62,20 +49,39 @@ ADD https://api.github.com/repos/pbtrung/gamja/releases/latest /tmp/gamja-latest
 COPY update-gamja.sh /usr/local/bin/
 RUN GAMJA_DATA_DIR=/out/gamja update-gamja.sh "${GAMJA_REF}"
 
+# Cloudflare's IP ranges, the only sources HAProxy lets through to 8443
+# (haproxy.cfg). Fetched with ADD on every build, like the releases above.
+# The lists have no final newline; every line must be a CIDR range.
+ADD https://www.cloudflare.com/ips-v4/ /tmp/cf-ips-v4.txt
+ADD https://www.cloudflare.com/ips-v6/ /tmp/cf-ips-v6.txt
+RUN mkdir -p /out/haproxy && \
+    { cat /tmp/cf-ips-v4.txt; echo; cat /tmp/cf-ips-v6.txt; echo; } | \
+      tr -d '\r' | sed 's/^ *//;s/ *$//;/^$/d' >/out/haproxy/cloudflare-ips.txt && \
+    if grep -Evq '^([0-9.]+|[0-9a-f:]+)/[0-9]+$' /out/haproxy/cloudflare-ips.txt; then \
+      echo "Unexpected line in Cloudflare's IP lists:" >&2; \
+      grep -Ev '^([0-9.]+|[0-9a-f:]+)/[0-9]+$' /out/haproxy/cloudflare-ips.txt >&2; \
+      exit 1; \
+    fi && \
+    grep -q '\.' /out/haproxy/cloudflare-ips.txt && \
+    grep -q ':' /out/haproxy/cloudflare-ips.txt && \
+    cat /out/haproxy/cloudflare-ips.txt
+
 FROM alpine:edge
 
 RUN addgroup -g 1000 soju && \
     adduser -u 1000 -G soju -D soju
 
+# haproxy: HTTPS, Cloudflare IP filter, routing; busybox-extras: httpd for
+# gamja's files.
 # rclone: copy backups off the machine from a shell.
 # sqlite: inspect the soju DB and take consistent backups from a shell.
 RUN apk update && \
     apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata mailcap nginx su-exec \
+    apk --no-cache add ca-certificates tzdata haproxy busybox-extras su-exec \
       rclone sqlite
 
 COPY --from=builder /out/gamja /usr/share/gamja-dist
-COPY --from=builder /out/dnclient /usr/local/bin/dnclient
+COPY --from=builder /out/haproxy/cloudflare-ips.txt /etc/haproxy/
 # soju-rs binaries have no built-in config path: the soju and sojuctl
 # wrappers in /usr/local/bin pass -config /etc/soju/config, so sojuctl works
 # without flags inside the container shell.
@@ -84,20 +90,14 @@ COPY soju-wrapper.sh /usr/local/bin/soju
 COPY soju-wrapper.sh /usr/local/bin/sojuctl
 COPY soju.conf /etc/soju/config
 
-# dnclient keeps its enrollment on the volume instead of /var/lib/defined,
-# so restarts and redeploys don't enroll the host again. Set in the image
-# so `dnclient info` in a shell finds the same state and socket.
-ENV DNCLIENT_STATE_DIR=/data/defined \
-    DNCLIENT_SOCKET_DIR=/run
-
 WORKDIR /script
 COPY entrypoint.sh /script/
-COPY nginx.conf /script/nginx.conf
+COPY haproxy.cfg httpd.conf /script/
 COPY update-gamja.sh /usr/local/bin/update-gamja.sh
 
-# 8080: nginx (gamja + WebSocket), 6667: soju plain IRC. fly.toml exposes
-# neither publicly: both are only reachable over the Defined Networking
-# (Nebula) overlay and Fly's private network.
-EXPOSE 8080 6667/tcp
+# 8080: HAProxy (gamja + WebSocket), 6667: soju plain IRC. Both are only
+# reachable over Fly's private network.
+# 8443: HAProxy, public on 443 through Cloudflare (see fly.toml).
+EXPOSE 8080 8443 6667/tcp
 
 ENTRYPOINT ["/script/entrypoint.sh"]

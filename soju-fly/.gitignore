@@ -1,1 +1,5 @@
 token.txt
+*.pem
+*.crt
+*.key
+cf_token.txt

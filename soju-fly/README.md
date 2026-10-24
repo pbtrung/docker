@@ -1,4 +1,4 @@
-# soju + gamja + nginx on Fly.io
+# soju + gamja + HAProxy on Fly.io
 
 The [soju-nf](../soju-nf) image adapted for [Fly.io]. It runs:
 
@@ -6,40 +6,44 @@ The [soju-nf](../soju-nf) image adapted for [Fly.io]. It runs:
   from the latest [pbtrung/soju-rs release][soju-rs releases]
 - [gamja] — IRC web client, prebuilt release from the [pbtrung/gamja] fork,
   kept on the volume so it can be updated from a shell
-- nginx — serves gamja and proxies the IRC WebSocket (`/socket`) to soju
-- [dnclient] — joins the machine to a [Defined Networking] (Managed Nebula)
-  network. It replaces cloudflared, which soju-nf uses.
+- [HAProxy] — only lets Cloudflare's IPs in, terminates HTTPS, and routes
+  the IRC WebSocket (`/socket`) to soju and the rest to busybox httpd
+- busybox httpd — serves gamja's files on loopback
 
-Nothing is exposed publicly: `fly.toml` has no service, so the Fly proxy
-doesn't route any traffic to the machine. gamja and soju's plain IRC port are
-only reachable from hosts on your Defined network (and from Fly's
-private network).
+gamja is public at `https://soju.110000001.xyz`, through Cloudflare only.
+The Fly proxy passes port 443 through as raw TCP, with a PROXY protocol
+header carrying the real peer address. HAProxy first drops any peer that
+isn't in [Cloudflare's IP ranges][cloudflare ips], before any TLS work,
+then terminates TLS with a [Cloudflare Origin CA] cert and requires the
+client cert of [Authenticated Origin Pulls] (AOP), which only Cloudflare
+holds. soju's plain IRC
+port is only reachable from Fly's private network.
 
 File uploads (IRCv3 filehost) are disabled: soju-rs doesn't support them
-and nginx doesn't proxy `/uploads`.
+and HAProxy doesn't route `/uploads` to it.
 
 ```
-browser ───Nebula──▶ <nebula-ip>:8080 nginx ─┬─ /            gamja static files
-                                             ├─ /config.json  gamja config
-                                             ├─ /socket       ─▶ soju 127.0.0.1:8081 (WebSocket)
-                                             └─ /healthz      200 ok (Fly health check)
-IRC client ─Nebula──▶ <nebula-ip>:6667 soju plain IRC
+browser ─HTTPS─▶ Cloudflare ─HTTPS+AOP─▶ Fly :443 ─TCP+PROXY─▶ HAProxy :8443
+  edge (tcp): Cloudflare IPs only ─▶ app (http, TLS + AOP) ─┬─ /            ─▶ busybox httpd 127.0.0.1:8090 (gamja files)
+                                                            ├─ /config.json  gamja config (HAProxy)
+                                                            ├─ /socket       ─▶ soju 127.0.0.1:8081 (WebSocket)
+                                                            └─ /healthz      200 ok (HAProxy)
+Fly health check ──▶ HAProxy app :8080 (same paths, plain HTTP)
+IRC client ─6PN─▶ soju :6667 plain IRC
 ```
 
-Both ports also listen on Fly's private network (6PN), e.g.
+Ports 8080 and 6667 listen on Fly's private network (6PN), e.g.
 `soju-ndq0bn8tgjuyd.internal:6667`, which `fly proxy` and `fly wireguard`
 can reach.
 
 Fly settings (`fly.toml`): app `soju-ndq0bn8tgjuyd`, region `iad`, one
-`shared-cpu-1x` machine with 256 MB, no public service, and a 1 GB volume
+`shared-cpu-1x` machine with 256 MB, one TCP service (443 → 8443), and a 1 GB volume
 `soju_data` at `/data`. It holds:
 
 ```
 /data/
 ├── soju/main.db                 SQLite DB (SOJU_DATA_DIR)
 ├── gamja/                       gamja web client (GAMJA_DATA_DIR)
-├── defined/                     dnclient state (DNCLIENT_STATE_DIR)
-│   └── dnclient.yml             enrollment: host keys and Nebula config
 └── update-gamja.sh              gamja updater, copied on every start
 ```
 
@@ -47,13 +51,14 @@ Fly settings (`fly.toml`): app `soju-ndq0bn8tgjuyd`, region `iad`, one
 
 | File              | Purpose |
 | ----------------- | ------- |
-| `fly.toml`        | Fly app config: no public service, `/healthz` check, volume, VM size |
-| `Dockerfile`      | `builder` stage downloads a soju-rs release (checked against its `SHA256SUMS`), a gamja release and a `dnclient` release from Defined Networking's [downloads]; runtime stage on alpine:edge installs nginx, rclone and sqlite with `apk` |
+| `fly.toml`        | Fly app config: TCP service 443 → 8443, `/healthz` check, volume, VM size |
+| `Dockerfile`      | `builder` stage downloads a soju-rs release (checked against its `SHA256SUMS`) and a gamja release; runtime stage on alpine:edge installs HAProxy, busybox-extras (httpd), rclone and sqlite with `apk`; also fetches Cloudflare's IP ranges into `/etc/haproxy/cloudflare-ips.txt` |
 | `soju.conf`       | soju config, installed as `/etc/soju/config`: DB, message expiry, `chathistory-limit`, listeners, hostname |
 | `soju-wrapper.sh` | Installed as `soju` and `sojuctl`: runs the soju-rs binary with `-config /etc/soju/config` |
-| `entrypoint.sh`   | Installs gamja on the volume, starts dnclient (enrolling it once), uses `SOJU_CONFIG_FILE` as the soju config if set, creates the first admin, starts nginx then soju |
+| `entrypoint.sh`   | Installs gamja on the volume, writes the TLS certs from their secrets, uses `SOJU_CONFIG_FILE` as the soju config if set, creates the first admin, starts httpd, HAProxy, then soju |
 | `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` |
-| `nginx.conf`      | Serves gamja, proxies `/socket`, `/healthz`, rate limits |
+| `haproxy.cfg`     | `edge` (8443, tcp): Cloudflare IP filter on the PROXY header address; `app` (http): TLS + AOP, plain HTTP on 8080, `/healthz`, `/config.json`, per-IP rate limit, routing to soju and httpd |
+| `httpd.conf`      | busybox httpd: loopback only, MIME types for gamja's files |
 
 ## Environment variables
 
@@ -62,9 +67,9 @@ Set plain values under `[env]` in `fly.toml`, and secrets with
 
 | Variable              | Default                                     | Description |
 | --------------------- | ------------------------------------------- | ----------- |
-| `DN_ENROLLMENT_CODE`  | —                                           | Defined Networking enrollment code. **Secret.** Used only while `$DNCLIENT_STATE_DIR/dnclient.yml` doesn't exist |
-| `DN_API_SERVER`       | `https://api.defined.net`                   | Defined Networking API server |
-| `DNCLIENT_STATE_DIR`  | `/data/defined`                             | Where dnclient keeps its enrollment (instead of `/var/lib/defined`) |
+| `ORIGIN_CERT`         | —                                           | Cloudflare Origin CA cert (PEM or base64 of it). **Secret** |
+| `ORIGIN_KEY`          | —                                           | Its private key (PEM or base64 of it). **Secret** |
+| `CF_AOP_CA`           | —                                           | CA that signs Cloudflare's AOP client cert (PEM or base64 of it). **Secret**. HTTPS on 8443 is only enabled when all three are set |
 | `SOJU_ADMIN_USER`     | —                                           | Admin user created on first start (only while `/data/soju/main.db` doesn't exist) |
 | `SOJU_ADMIN_PASSWORD` | —                                           | Password for that admin user. **Secret** |
 | `SOJU_CONFIG_FILE`    | —                                           | Path to a complete soju config to use instead of the bundled `soju.conf` |
@@ -76,12 +81,8 @@ Build arguments: `SOJU_REF` (default `latest`) selects the
 [soju-rs release][soju-rs releases] to install (e.g. `v0.99.2`).
 `GAMJA_REF` (default `latest`) selects the gamja release
 bundled in the image, only installed on a volume without gamja.
-`DNCLIENT_VERSION` (default `latest`) is
-the dnclient version to download (e.g. `0.9.9`), looked up in
-`https://api.defined.net/v1/downloads`.
 
-The release metadata (GitHub's latest soju-rs and gamja releases, and the
-dnclient downloads) is fetched with `ADD` on every build, so a new release
+The release metadata (GitHub's latest soju-rs and gamja releases) is fetched with `ADD` on every build, so a new release
 invalidates the cached download layers: "latest" really is the latest, even
 with the build cache. The startup log shows the soju-rs version running
 (`Starting soju-rs vX`).
@@ -99,34 +100,57 @@ fly volumes create soju_data --region iad --size 1 -a soju-ndq0bn8tgjuyd
 fly secrets set -a soju-ndq0bn8tgjuyd --stage \
   SOJU_ADMIN_USER=admin \
   SOJU_ADMIN_PASSWORD='<a strong password>'
-printf 'DN_ENROLLMENT_CODE=%s\n' '<enrollment code>' |
-  fly secrets import -a soju-ndq0bn8tgjuyd --stage
+fly secrets set -a soju-ndq0bn8tgjuyd --stage \
+  ORIGIN_CERT="$(cat cert.pem)" \
+  ORIGIN_KEY="$(cat key.pem)" \
+  CF_AOP_CA="$(cat rootca.crt)"
 
 # 3. Build and deploy a single machine
 fly deploy --ha=false
 ```
 
 `--stage` stores the secrets without restarting anything; the first deploy
-picks them up. `fly secrets import` reads the code from standard input,
-so it stays out of your shell history and process list.
+picks them up. The cert files are ignored by git and Docker: keep them out
+of the repo and the image.
 
 Keep a single machine: the volume can only attach to one, and soju
 can't run as several instances. To check, run `fly scale show`. If
-there are more, run `fly scale count 1`. Without a service, the Fly proxy
-never stops or starts the machine, and `[[restart]] policy = 'always'`
+there are more, run `fly scale count 1`. There is no autoscaling (min = max
+= 1): the service has `auto_stop_machines = 'off'` and
+`auto_start_machines = false`, so the Fly proxy never stops or starts the
+machine, and `[[restart]] policy = 'always'`
 restarts it if soju exits.
 
-The app has no service, so it needs no public IP. If `fly ips list` shows
-any (the first deploy of an app with a service allocates them), you can
-release them with `fly ips release <ip>`.
+### Cloudflare
+
+The service is raw TCP (only the `proxy_proto` handler), which Fly only
+routes on a dedicated IP: the shared IPv4 doesn't work. Use the dedicated IPv6
+(`fly ips list`; `fly ips allocate-v6` if there is none). Cloudflare still
+serves IPv4 visitors.
+
+1. DNS: a proxied `AAAA` record `soju` → the app's dedicated IPv6, and no
+   `A` record to the shared IPv4.
+2. SSL/TLS mode: Full (strict). The Origin CA cert covers
+   `soju.110000001.xyz`.
+3. Authenticated Origin Pulls, per hostname: upload a client cert signed by
+   `CF_AOP_CA` (`POST /zones/{zone_id}/origin_tls_client_auth/hostnames/certificates`),
+   enable it for `soju.110000001.xyz`
+   (`PUT /zones/{zone_id}/origin_tls_client_auth/hostnames`), and turn on
+   AOP for the zone. Until then HAProxy fails Cloudflare's TLS handshake.
+
+`curl -I https://soju.110000001.xyz/healthz` should return 200, and the
+startup log shows `Enabling HTTPS on 8443 with the Cloudflare origin cert
+and AOP`.
+
+Cloudflare's IP ranges are baked into the image at build time: redeploy
+(`fly deploy --ha=false`) when Cloudflare announces new ones.
 
 The image build runs on Fly's remote builder and only installs packages and
 downloads releases.
 
 ### Log in
 
-From a host on your Defined network, open `http://<nebula-ip>:8080` (see
-[Defined Networking](#defined-networking)). gamja loads. Log in with
+Open `https://soju.110000001.xyz`. gamja loads. Log in with
 `SOJU_ADMIN_USER` / `SOJU_ADMIN_PASSWORD`, then add an upstream network,
 either in gamja's "add network" UI or with `BouncerServ`:
 
@@ -153,44 +177,11 @@ sojuctl user status
 has no `sojudb`: the entrypoint creates the first admin with `sojuctl` over
 the admin socket once soju is up.
 
-## Defined Networking
-
-With `DN_ENROLLMENT_CODE` set, the entrypoint starts `dnclient run` in the
-background and, on the first start only, enrolls the host with
-`dnclient enroll -code`. dnclient's state lives in `/data/defined` (set with
-`DNCLIENT_STATE_DIR` in the image) rather than its usual `/var/lib/defined`,
-so it survives restarts and redeploys. Once `/data/defined/dnclient.yml`
-exists, the code isn't used again: later starts only run the daemon, and
-you can remove the secret with `fly secrets unset DN_ENROLLMENT_CODE`.
-
-1. In the [Defined Networking admin panel][dn admin], add a host and copy
-   its enrollment code (codes are single-use and expire).
-2. Store it as a secret (see [Deploy](#deploy)) and deploy. The logs show
-   `Enrolling with Defined Networking`; the host's Nebula IP is in the
-   admin panel, or `fly ssh console -C 'dnclient info'`.
-3. Allow ports 8080 and 6667 to the host in its role's firewall rules, then
-   connect from another host on the network to `<nebula-ip>:6667` or
-   `http://<nebula-ip>:8080`.
-
-If enrollment fails (a bad or used code), the machine fails to start and Fly
-restarts it. To enroll again (e.g. as another host), delete the state and
-set a new code:
-
-```sh
-fly ssh console -C 'rm -rf /data/defined'
-printf 'DN_ENROLLMENT_CODE=%s\n' '<new code>' | fly secrets import  # restarts the machine
-```
-
-Without `DN_ENROLLMENT_CODE` and without a saved `dnclient.yml`, dnclient
-isn't started. gamja and IRC are then only reachable from Fly's private
-network, e.g. `fly proxy 8080` then `http://localhost:8080`.
-
 ## Updating
 
 - `fly deploy` rebuilds the image and picks up the latest soju-rs release
-  and the latest `dnclient` (check `Starting soju-rs vX` in `fly logs`).
-  The DB and the dnclient enrollment live
-  on the volume and survive it. soju migrates its schema itself on startup.
+  (check `Starting soju-rs vX` in `fly logs`). The DB lives on the
+  volume and survives it. soju migrates its schema itself on startup.
 - gamja is updated from a shell, not by a new image:
 
   ```sh
@@ -199,7 +190,7 @@ network, e.g. `fly proxy 8080` then `http://localhost:8080`.
   ```
 
   The script downloads the release's `.zip`, unpacks it next to the current
-  copy and swaps the two directories, so nginx never serves a half-installed
+  copy and swaps the two directories, so httpd never serves a half-installed
   tree. Set `FORCE=1` to reinstall the same tag. Reload gamja in the browser
   afterwards. No restart is needed.
 
@@ -235,30 +226,38 @@ soju's memory down on the 256 MB machine while gamja loads every buffer.
 ```sh
 docker build -t soju-fly soju-fly/
 docker run --rm -p 8080:8080 -v soju-data:/data \
-  --cap-add NET_ADMIN \
   -e SOJU_ADMIN_USER=admin -e SOJU_ADMIN_PASSWORD=changeme \
-  -e DN_ENROLLMENT_CODE=... \
   soju-fly
 ```
 
-`--cap-add NET_ADMIN` is only needed with `DN_ENROLLMENT_CODE`, for
-dnclient's tun interface.
+gamja is then at `http://localhost:8080`. Without the cert secrets, HTTPS
+on 8443 stays off.
 
 ## Notes
 
-- nginx sees clients' own Nebula IPs and forwards them to soju as a
-  single `X-Forwarded-For` address, which soju trusts from loopback
-  (`accept-proxy-ip localhost`). Rate limits apply per client.
+- On 8443, HAProxy takes the client's IP from `CF-Connecting-IP` (safe:
+  only Cloudflare passes the IP filter and the AOP check) and sends it to
+  soju as a single `X-Forwarded-For`, which soju trusts from loopback
+  (`accept-proxy-ip localhost`). Any `Forwarded` header from a client is
+  dropped, since soju prefers it.
+- Each client IP may make 90 requests per minute (the WebSocket isn't
+  counted); more get a 429. HAProxy's `maxconn 100` and Fly's
+  `hard_limit = 30` cap the totals.
+- The service caps the machine at 30 concurrent TCP connections
+  (`[services.concurrency]`, `hard_limit = 30`): the Fly proxy doesn't
+  send it more. Each open gamja tab holds one WebSocket connection, so
+  raise it if you have more users.
 - gamja sends `PING` every 30 s by default (`GAMJA_CONFIG_JSON`) to keep
-  its WebSocket open through NAT along the way.
-- The machine never stops on its own: there's no service for the Fly proxy
-  to auto-stop, and `[[restart]] policy = 'always'` restarts it if soju
+  its WebSocket open through Cloudflare (100 s idle timeout) and NAT.
+- The machine never stops on its own: the service has auto-stop and
+  auto-start off, and `[[restart]] policy = 'always'` restarts it if soju
   exits. Deploys stop it and start the new image on the same volume
   (`strategy = 'immediate'`), sending soju `SIGTERM` with 30 s to shut
   down cleanly. 512 MB of swap keeps a memory spike from OOM-killing soju
   on the 256 MB VM.
-- gamja is served over plain HTTP. The Nebula tunnel encrypts the traffic
-  in transit.
+- Traffic is HTTPS end to end: visitor → Cloudflare (Cloudflare's edge
+  cert) and Cloudflare → HAProxy (Origin CA cert). Port 8080 is plain HTTP
+  but only on Fly's private network.
 
 [Fly.io]: https://fly.io/
 [soju]: https://soju.im/
@@ -266,8 +265,8 @@ dnclient's tun interface.
 [soju-rs releases]: https://github.com/pbtrung/soju-rs/releases
 [gamja]: https://codeberg.org/emersion/gamja
 [pbtrung/gamja]: https://github.com/pbtrung/gamja
-[dnclient]: https://docs.defined.net/glossary/dnclient/
-[Defined Networking]: https://www.defined.net/
-[downloads]: https://www.defined.net/downloads/
-[dn admin]: https://admin.defined.net/
+[HAProxy]: https://www.haproxy.org/
+[cloudflare ips]: https://www.cloudflare.com/ips/
+[Cloudflare Origin CA]: https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/
+[Authenticated Origin Pulls]: https://developers.cloudflare.com/ssl/origin-configuration/authenticated-origin-pull/
 [config file]: https://codeberg.org/emersion/gamja/src/branch/master/doc/config-file.md
