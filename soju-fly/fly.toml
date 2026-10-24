@@ -18,7 +18,7 @@ primary_region = 'iad'
 kill_signal = 'SIGTERM'
 kill_timeout = '30s'
 
-# 256 MB is tight for soju + HAProxy; swap keeps a spike from OOM-killing soju
+# 256 MB is tight for soju + nginx; swap keeps a spike from OOM-killing soju
 swap_size_mb = 512
 
 [build]
@@ -37,7 +37,7 @@ swap_size_mb = 512
 
 # Health check run by Fly on the machine itself
 [checks]
-  [checks.haproxy]
+  [checks.nginx]
     type = 'http'
     port = 8080
     method = 'GET'
@@ -57,9 +57,10 @@ swap_size_mb = 512
 
 # HTTPS through Cloudflare. The Fly proxy passes the TCP stream through
 # with a PROXY protocol header carrying the real peer address (proxy_proto
-# handler): HAProxy on 8443 rejects anything not from Cloudflare's IPs, then
-# terminates TLS with the Cloudflare Origin CA cert and requires
-# Cloudflare's Authenticated Origin Pulls client cert (haproxy.cfg). The certs come from the ORIGIN_CERT,
+# handler): nginx's stream block on 8443 rejects anything not from
+# Cloudflare's IPs (nginx-stream.conf), then the HTTPS server terminates TLS
+# with the Cloudflare Origin CA cert and requires Cloudflare's Authenticated
+# Origin Pulls client cert (nginx-tls.conf). The certs come from the ORIGIN_CERT,
 # ORIGIN_KEY and CF_AOP_CA secrets, written by entrypoint.sh.
 # Raw TCP only works on a dedicated IP: point Cloudflare at the app's
 # dedicated IPv6 (proxied AAAA record), not the shared IPv4.

@@ -49,39 +49,40 @@ ADD https://api.github.com/repos/pbtrung/gamja/releases/latest /tmp/gamja-latest
 COPY update-gamja.sh /usr/local/bin/
 RUN GAMJA_DATA_DIR=/out/gamja update-gamja.sh "${GAMJA_REF}"
 
-# Cloudflare's IP ranges, the only sources HAProxy lets through to 8443
-# (haproxy.cfg). Fetched with ADD on every build, like the releases above.
-# The lists have no final newline; every line must be a CIDR range.
+# Cloudflare's IP ranges, the only sources nginx lets through to 8443
+# (nginx-stream.conf), as "allow" lines. Fetched with ADD on every build,
+# like the releases above. The lists have no final newline; every line must
+# be a CIDR range.
 ADD https://www.cloudflare.com/ips-v4/ /tmp/cf-ips-v4.txt
 ADD https://www.cloudflare.com/ips-v6/ /tmp/cf-ips-v6.txt
-RUN mkdir -p /out/haproxy && \
+RUN mkdir -p /out/nginx && \
     { cat /tmp/cf-ips-v4.txt; echo; cat /tmp/cf-ips-v6.txt; echo; } | \
-      tr -d '\r' | sed 's/^ *//;s/ *$//;/^$/d' >/out/haproxy/cloudflare-ips.txt && \
-    if grep -Evq '^([0-9.]+|[0-9a-f:]+)/[0-9]+$' /out/haproxy/cloudflare-ips.txt; then \
+      tr -d '\r' | sed 's/^ *//;s/ *$//;/^$/d' >/out/nginx/cloudflare-ips.txt && \
+    if grep -Evq '^([0-9.]+|[0-9a-f:]+)/[0-9]+$' /out/nginx/cloudflare-ips.txt; then \
       echo "Unexpected line in Cloudflare's IP lists:" >&2; \
-      grep -Ev '^([0-9.]+|[0-9a-f:]+)/[0-9]+$' /out/haproxy/cloudflare-ips.txt >&2; \
+      grep -Ev '^([0-9.]+|[0-9a-f:]+)/[0-9]+$' /out/nginx/cloudflare-ips.txt >&2; \
       exit 1; \
     fi && \
-    grep -q '\.' /out/haproxy/cloudflare-ips.txt && \
-    grep -q ':' /out/haproxy/cloudflare-ips.txt && \
-    cat /out/haproxy/cloudflare-ips.txt
+    grep -q '\.' /out/nginx/cloudflare-ips.txt && \
+    grep -q ':' /out/nginx/cloudflare-ips.txt && \
+    sed 's/.*/allow &;/' /out/nginx/cloudflare-ips.txt >/out/nginx/cloudflare-allow.conf && \
+    cat /out/nginx/cloudflare-allow.conf
 
 FROM alpine:edge
 
 RUN addgroup -g 1000 soju && \
     adduser -u 1000 -G soju -D soju
 
-# haproxy: HTTPS, Cloudflare IP filter, routing; busybox-extras: httpd for
-# gamja's files.
+# nginx-mod-stream: the Cloudflare IP filter in front of TLS.
 # rclone: copy backups off the machine from a shell.
 # sqlite: inspect the soju DB and take consistent backups from a shell.
 RUN apk update && \
     apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata haproxy busybox-extras su-exec \
+    apk --no-cache add ca-certificates tzdata nginx nginx-mod-stream su-exec \
       rclone sqlite
 
 COPY --from=builder /out/gamja /usr/share/gamja-dist
-COPY --from=builder /out/haproxy/cloudflare-ips.txt /etc/haproxy/
+COPY --from=builder /out/nginx/cloudflare-allow.conf /etc/nginx/
 # soju-rs binaries have no built-in config path: the soju and sojuctl
 # wrappers in /usr/local/bin pass -config /etc/soju/config, so sojuctl works
 # without flags inside the container shell.
@@ -92,12 +93,12 @@ COPY soju.conf /etc/soju/config
 
 WORKDIR /script
 COPY entrypoint.sh /script/
-COPY haproxy.cfg httpd.conf /script/
+COPY nginx.conf nginx-stream.conf nginx-tls.conf gamja-locations.conf /script/
 COPY update-gamja.sh /usr/local/bin/update-gamja.sh
 
-# 8080: HAProxy (gamja + WebSocket), 6667: soju plain IRC. Both are only
+# 8080: nginx (gamja + WebSocket), 6667: soju plain IRC. Both are only
 # reachable over Fly's private network.
-# 8443: HAProxy, public on 443 through Cloudflare (see fly.toml).
+# 8443: nginx, public on 443 through Cloudflare (see fly.toml).
 EXPOSE 8080 8443 6667/tcp
 
 ENTRYPOINT ["/script/entrypoint.sh"]

@@ -1,4 +1,4 @@
-# soju + gamja + HAProxy on Fly.io
+# soju + gamja + nginx on Fly.io
 
 The [soju-nf](../soju-nf) image adapted for [Fly.io]. It runs:
 
@@ -6,13 +6,13 @@ The [soju-nf](../soju-nf) image adapted for [Fly.io]. It runs:
   from the latest [pbtrung/soju-rs release][soju-rs releases]
 - [gamja] — IRC web client, prebuilt release from the [pbtrung/gamja] fork,
   kept on the volume so it can be updated from a shell
-- [HAProxy] — only lets Cloudflare's IPs in, terminates HTTPS, and routes
-  the IRC WebSocket (`/socket`) to soju and the rest to busybox httpd
-- busybox httpd — serves gamja's files on loopback
+- nginx, one worker — only lets Cloudflare's IPs in (stream module),
+  terminates HTTPS, serves gamja and proxies the IRC WebSocket (`/socket`)
+  to soju
 
 gamja is public at `https://soju.110000001.xyz`, through Cloudflare only.
 The Fly proxy passes port 443 through as raw TCP, with a PROXY protocol
-header carrying the real peer address. HAProxy first drops any peer that
+header carrying the real peer address. nginx's stream block first drops any peer that
 isn't in [Cloudflare's IP ranges][cloudflare ips], before any TLS work,
 then terminates TLS with a [Cloudflare Origin CA] cert and requires the
 client cert of [Authenticated Origin Pulls] (AOP), which only Cloudflare
@@ -20,15 +20,15 @@ holds. soju's plain IRC
 port is only reachable from Fly's private network.
 
 File uploads (IRCv3 filehost) are disabled: soju-rs doesn't support them
-and HAProxy doesn't route `/uploads` to it.
+and nginx doesn't proxy `/uploads`.
 
 ```
-browser ─HTTPS─▶ Cloudflare ─HTTPS+AOP─▶ Fly :443 ─TCP+PROXY─▶ HAProxy :8443
-  edge (tcp): Cloudflare IPs only ─▶ app (http, TLS + AOP) ─┬─ /            ─▶ busybox httpd 127.0.0.1:8090 (gamja files)
-                                                            ├─ /config.json  gamja config (HAProxy)
-                                                            ├─ /socket       ─▶ soju 127.0.0.1:8081 (WebSocket)
-                                                            └─ /healthz      200 ok (HAProxy)
-Fly health check ──▶ HAProxy app :8080 (same paths, plain HTTP)
+browser ─HTTPS─▶ Cloudflare ─HTTPS+AOP─▶ Fly :443 ─TCP+PROXY─▶ nginx stream :8443
+  Cloudflare IPs only ─▶ nginx https 127.0.0.1:8444 (TLS + AOP) ─┬─ /            gamja static files
+                                                                 ├─ /config.json  gamja config
+                                                                 ├─ /socket       ─▶ soju 127.0.0.1:8081 (WebSocket)
+                                                                 └─ /healthz      200 ok
+Fly health check ──▶ nginx :8080 (same paths, plain HTTP)
 IRC client ─6PN─▶ soju :6667 plain IRC
 ```
 
@@ -52,13 +52,15 @@ Fly settings (`fly.toml`): app `soju-ndq0bn8tgjuyd`, region `iad`, one
 | File              | Purpose |
 | ----------------- | ------- |
 | `fly.toml`        | Fly app config: TCP service 443 → 8443, `/healthz` check, volume, VM size |
-| `Dockerfile`      | `builder` stage downloads a soju-rs release (checked against its `SHA256SUMS`) and a gamja release; runtime stage on alpine:edge installs HAProxy, busybox-extras (httpd), rclone and sqlite with `apk`; also fetches Cloudflare's IP ranges into `/etc/haproxy/cloudflare-ips.txt` |
+| `Dockerfile`      | `builder` stage downloads a soju-rs release (checked against its `SHA256SUMS`) and a gamja release; runtime stage on alpine:edge installs nginx (with the stream module), rclone and sqlite with `apk`; also fetches Cloudflare's IP ranges into `/etc/nginx/cloudflare-allow.conf` |
 | `soju.conf`       | soju config, installed as `/etc/soju/config`: DB, message expiry, `chathistory-limit`, listeners, hostname |
 | `soju-wrapper.sh` | Installed as `soju` and `sojuctl`: runs the soju-rs binary with `-config /etc/soju/config` |
-| `entrypoint.sh`   | Installs gamja on the volume, writes the TLS certs from their secrets, uses `SOJU_CONFIG_FILE` as the soju config if set, creates the first admin, starts httpd, HAProxy, then soju |
+| `entrypoint.sh`   | Installs gamja on the volume, writes the TLS certs from their secrets, uses `SOJU_CONFIG_FILE` as the soju config if set, creates the first admin, starts nginx then soju |
 | `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` |
-| `haproxy.cfg`     | `edge` (8443, tcp): Cloudflare IP filter on the PROXY header address; `app` (http): TLS + AOP, plain HTTP on 8080, `/healthz`, `/config.json`, per-IP rate limit, routing to soju and httpd |
-| `httpd.conf`      | busybox httpd: loopback only, MIME types for gamja's files |
+| `nginx.conf`      | One worker; plain HTTP server on 8080, per-IP limits; includes the stream filter and TLS server when enabled |
+| `nginx-stream.conf` | Stream server on 8443: PROXY protocol, Cloudflare IP allow-list, passes the TLS stream to 127.0.0.1:8444 |
+| `nginx-tls.conf`  | HTTPS server on 127.0.0.1:8444: Origin CA cert, AOP client cert check, client IP from `CF-Connecting-IP` |
+| `gamja-locations.conf` | gamja, `/config.json`, `/socket` and `/healthz` locations, shared by both HTTP servers |
 
 ## Environment variables
 
@@ -136,7 +138,7 @@ serves IPv4 visitors.
    `CF_AOP_CA` (`POST /zones/{zone_id}/origin_tls_client_auth/hostnames/certificates`),
    enable it for `soju.110000001.xyz`
    (`PUT /zones/{zone_id}/origin_tls_client_auth/hostnames`), and turn on
-   AOP for the zone. Until then HAProxy fails Cloudflare's TLS handshake.
+   AOP for the zone. Until then nginx answers Cloudflare with 400.
 
 `curl -I https://soju.110000001.xyz/healthz` should return 200, and the
 startup log shows `Enabling HTTPS on 8443 with the Cloudflare origin cert
@@ -190,7 +192,7 @@ the admin socket once soju is up.
   ```
 
   The script downloads the release's `.zip`, unpacks it next to the current
-  copy and swaps the two directories, so httpd never serves a half-installed
+  copy and swaps the two directories, so nginx never serves a half-installed
   tree. Set `FORCE=1` to reinstall the same tag. Reload gamja in the browser
   afterwards. No restart is needed.
 
@@ -235,14 +237,15 @@ on 8443 stays off.
 
 ## Notes
 
-- On 8443, HAProxy takes the client's IP from `CF-Connecting-IP` (safe:
+- On 8443, nginx takes the client's IP from `CF-Connecting-IP` (safe:
   only Cloudflare passes the IP filter and the AOP check) and sends it to
   soju as a single `X-Forwarded-For`, which soju trusts from loopback
   (`accept-proxy-ip localhost`). Any `Forwarded` header from a client is
   dropped, since soju prefers it.
-- Each client IP may make 90 requests per minute (the WebSocket isn't
-  counted); more get a 429. HAProxy's `maxconn 100` and Fly's
-  `hard_limit = 30` cap the totals.
+- Per client IP: 60 requests per minute for gamja's files (burst 30) and
+  20 concurrent connections; nginx closes the connection on a violation.
+  One nginx worker with 256 connections and Fly's `hard_limit = 30` cap
+  the totals.
 - The service caps the machine at 30 concurrent TCP connections
   (`[services.concurrency]`, `hard_limit = 30`): the Fly proxy doesn't
   send it more. Each open gamja tab holds one WebSocket connection, so
@@ -256,7 +259,7 @@ on 8443 stays off.
   down cleanly. 512 MB of swap keeps a memory spike from OOM-killing soju
   on the 256 MB VM.
 - Traffic is HTTPS end to end: visitor → Cloudflare (Cloudflare's edge
-  cert) and Cloudflare → HAProxy (Origin CA cert). Port 8080 is plain HTTP
+  cert) and Cloudflare → nginx (Origin CA cert). Port 8080 is plain HTTP
   but only on Fly's private network.
 
 [Fly.io]: https://fly.io/
@@ -265,7 +268,6 @@ on 8443 stays off.
 [soju-rs releases]: https://github.com/pbtrung/soju-rs/releases
 [gamja]: https://codeberg.org/emersion/gamja
 [pbtrung/gamja]: https://github.com/pbtrung/gamja
-[HAProxy]: https://www.haproxy.org/
 [cloudflare ips]: https://www.cloudflare.com/ips/
 [Cloudflare Origin CA]: https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/
 [Authenticated Origin Pulls]: https://developers.cloudflare.com/ssl/origin-configuration/authenticated-origin-pull/

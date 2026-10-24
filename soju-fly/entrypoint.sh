@@ -17,7 +17,7 @@ chown soju:soju /run/soju
 
 # gamja lives on the volume so it can be updated without a new image: run
 # update-gamja.sh (copied next to $GAMJA_DATA_DIR) from a shell. Seed it from
-# the release baked into the image on the first start; busybox httpd serves it
+# the release baked into the image on the first start; nginx serves it
 # through the /usr/share/gamja symlink.
 if [ ! -f "$GAMJA_DATA_DIR/index.html" ]; then
   printf "Installing bundled gamja %s in %s\n" \
@@ -26,8 +26,7 @@ if [ ! -f "$GAMJA_DATA_DIR/index.html" ]; then
   mkdir -p "$(dirname "$GAMJA_DATA_DIR")"
   cp -a /usr/share/gamja-dist "$GAMJA_DATA_DIR"
 fi
-# Root owns gamja; httpd (which runs as nobody) must be able to reach and
-# read it.
+# Root owns gamja; nginx workers must be able to reach and read it.
 chown -R root:root "$GAMJA_DATA_DIR"
 chmod a+x "$(dirname "$GAMJA_DATA_DIR")"
 chmod -R a+rX "$GAMJA_DATA_DIR"
@@ -74,36 +73,35 @@ fi
 # aren't dropped by NAT or proxies along the way.
 printf "%s\n" "${GAMJA_CONFIG_JSON:-{\"server\":{\"auth\":\"mandatory\",\"ping\":30\}\}}" >/tmp/gamja-config.json
 
-# Public HTTPS through Cloudflare (haproxy.cfg): enabled when the Origin
-# CA cert, its key and the Authenticated Origin Pulls CA are all set. Each
-# secret may hold the PEM itself or its base64 encoding.
+# Public HTTPS through Cloudflare (nginx-stream.conf, nginx-tls.conf):
+# enabled when the Origin CA cert, its key and the Authenticated Origin
+# Pulls CA are all set. Each secret may hold the PEM itself or its base64
+# encoding.
 write_pem() {
   if printf "%s\n" "$1" | grep -q -- "-----BEGIN"; then
-    printf "%s\n" "$1"
+    printf "%s\n" "$1" >"$2"
   else
-    printf "%s" "$1" | base64 -d
+    printf "%s" "$1" | base64 -d >"$2"
   fi
 }
+rm -rf /etc/nginx/stream.d /etc/nginx/tls.d
+mkdir -p /etc/nginx/stream.d /etc/nginx/tls.d
 if [ -n "$ORIGIN_CERT" ] && [ -n "$ORIGIN_KEY" ] && [ -n "$CF_AOP_CA" ]; then
   mkdir -p /etc/certs
   chmod 755 /etc/certs
-  # HAProxy takes the cert and its key in one file
-  (umask 077 && { write_pem "$ORIGIN_CERT"; write_pem "$ORIGIN_KEY"; } >/etc/certs/origin.pem)
-  write_pem "$CF_AOP_CA" >/etc/certs/cf-aop-ca.pem
-  export HAPROXY_TLS=1
-  printf "Enabling HTTPS on 8443 with the Cloudflare origin cert and AOP\n"
+  (umask 077 && write_pem "$ORIGIN_KEY" /etc/certs/origin-key.pem)
+  write_pem "$ORIGIN_CERT" /etc/certs/origin.pem
+  write_pem "$CF_AOP_CA" /etc/certs/cf-aop-ca.pem
+  cp /script/nginx-stream.conf /etc/nginx/stream.d/
+  cp /script/nginx-tls.conf /etc/nginx/tls.d/
+  printf "Enabling HTTPS on 8443 with the Cloudflare IP filter, origin cert and AOP\n"
 else
-  unset HAPROXY_TLS
   printf "ORIGIN_CERT, ORIGIN_KEY or CF_AOP_CA not set, HTTPS on 8443 disabled\n"
 fi
 
-# gamja's files, behind HAProxy (it daemonizes)
-httpd -p 127.0.0.1:8090 -h /usr/share/gamja -c /script/httpd.conf -u nobody
-
-HAPROXY_CONF="${HAPROXY_CONF:-/script/haproxy.cfg}"
-printf "Starting HAProxy with config: %s\n" "$HAPROXY_CONF"
-haproxy -c -q -f "$HAPROXY_CONF"
-haproxy -db -f "$HAPROXY_CONF" &
+NGINX_CONF="${NGINX_CONF:-/script/nginx.conf}"
+printf "Starting nginx with config: %s\n" "$NGINX_CONF"
+nginx -c "$NGINX_CONF"
 
 # soju-rs releases before v0.99.7 have no -version: don't let set -e stop
 # the container for it
