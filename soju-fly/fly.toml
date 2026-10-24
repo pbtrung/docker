@@ -88,7 +88,6 @@ swap_size_mb = 512
     port = 443
     handlers = ['proxy_proto']
 
-  [[services.tcp_checks]]
-    grace_period = '15s'
-    interval = '30s'
-    timeout = '5s'
+  # No service check: Fly's checks connect to 8443 without the PROXY
+  # protocol header nginx requires there, which logs a "broken header" error
+  # every time. The HTTP check on 8080 ([checks.nginx]) covers nginx.
