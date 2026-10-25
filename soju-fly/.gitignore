@@ -4,3 +4,4 @@ token.txt
 *.key
 cf_token.txt
 .env
+certs/

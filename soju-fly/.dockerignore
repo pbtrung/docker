@@ -4,3 +4,4 @@ token.txt
 *.crt
 *.key
 .env
+certs/

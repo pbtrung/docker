@@ -58,7 +58,8 @@ Fly settings (`fly.toml`): app from `$FLY_APP` (see [App name](#app-name)), regi
 | `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` |
 | `nginx.conf`      | One worker; plain HTTP server on 8080, per-IP limits; includes the stream filter and TLS server when enabled |
 | `nginx-stream.conf` | Stream server on 8443: PROXY protocol, Cloudflare IP allow-list, passes the TLS stream to 127.0.0.1:8444 |
-| `nginx-tls.conf`  | HTTPS server on 127.0.0.1:8444: Origin CA cert, AOP client cert check, client IP from `CF-Connecting-IP` |
+| `nginx-tls.conf`  | HTTPS server on 127.0.0.1:8444: TLS 1.3 and `X25519MLKEM768` only, server cert, AOP client cert check, client IP from `CF-Connecting-IP`, `pq` access log |
+| `cert.sh`         | Generates the ML-DSA-44 AOP and COTS CAs and certs into `certs/` (git- and Docker-ignored) |
 | `gamja-locations.conf` | gamja, `/config.json`, `/socket` and `/healthz` locations, shared by both HTTP servers |
 
 ## Environment variables
@@ -68,7 +69,7 @@ Set plain values under `[env]` in `fly.toml`, and secrets with
 
 | Variable              | Default                                     | Description |
 | --------------------- | ------------------------------------------- | ----------- |
-| `ORIGIN_CERT`         | —                                           | Cloudflare Origin CA cert (PEM or base64 of it). **Secret** |
+| `ORIGIN_CERT`         | —                                           | nginx server cert: Cloudflare Origin CA cert, or `certs/origin.crt` with COTS (PEM or base64 of it). **Secret** |
 | `ORIGIN_KEY`          | —                                           | Its private key (PEM or base64 of it). **Secret** |
 | `CF_AOP_CA`           | —                                           | CA that signs Cloudflare's AOP client cert (PEM or base64 of it). **Secret**. HTTPS on 8443 is only enabled when all three are set |
 | `SOJU_ADMIN_USER`     | —                                           | Admin user created on first start (only while `/data/soju/main.db` doesn't exist) |
@@ -126,7 +127,7 @@ fly secrets set --stage \
 fly secrets set --stage \
   ORIGIN_CERT="$(cat cert.pem)" \
   ORIGIN_KEY="$(cat key.pem)" \
-  CF_AOP_CA="$(cat rootca.crt)"
+  CF_AOP_CA="$(cat certs/aop-ca.crt)"
 
 # 3. Build and deploy a single machine
 fly deploy --ha=false
@@ -155,8 +156,11 @@ serves IPv4 visitors.
    `A` record to the shared IPv4.
 2. SSL/TLS mode: Full (strict). The Origin CA cert covers
    `soju.110000001.xyz`.
-3. Authenticated Origin Pulls, per hostname: upload a client cert signed by
-   `CF_AOP_CA` (`POST /zones/{zone_id}/origin_tls_client_auth/hostnames/certificates`),
+3. Authenticated Origin Pulls, per hostname, with the ML-DSA-44 certs from
+   `./cert.sh` (see [Post-quantum authentication](#post-quantum-authentication)):
+   `certs/aop-ca.crt` is the `CF_AOP_CA` secret. Upload
+   `certs/aop-client.crt` and `certs/aop-client.key`
+   (`POST /zones/{zone_id}/origin_tls_client_auth/hostnames/certificates`),
    enable it for `soju.110000001.xyz`
    (`PUT /zones/{zone_id}/origin_tls_client_auth/hostnames`), and turn on
    AOP for the zone. Until then nginx answers Cloudflare with 400.
@@ -164,6 +168,62 @@ serves IPv4 visitors.
 `curl -I https://soju.110000001.xyz/healthz` should return 200, and the
 startup log shows `Enabling HTTPS on 8443 with the Cloudflare origin cert
 and AOP`.
+
+### Post-quantum authentication
+
+Following Cloudflare's [post-quantum authentication to origins][pq origins],
+the Cloudflare → nginx connection is TLS 1.3 only, with:
+
+- key exchange: `X25519MLKEM768` only (`ssl_ecdh_curve`), the hybrid
+  Cloudflare offers origins; a classical-only handshake fails rather than
+  downgrading
+- Cloudflare's identity: an [ML-DSA-44 AOP client cert][aop ml-dsa], checked
+  against an ML-DSA-44 CA, so a classical client cert never verifies
+- nginx's identity: the Cloudflare Origin CA cert (classical) by default, or
+  an ML-DSA-44 server cert trusted through Cloudflare's Custom Origin Trust
+  Store (COTS), below
+
+ML-DSA-44 because it's the only ML-DSA Cloudflare's TLS client to origins
+offers (its ClientHello lists `mldsa44` alone): with an ML-DSA-65 or -87
+AOP cert, Cloudflare aborts the handshake (`handshake_failure`, visible
+with nginx's error log at `info`) and visitors get a 525. The same applies
+to a COTS server cert. Cloudflare first sends an `x25519` key share and
+retries with `X25519MLKEM768` when nginx asks (one more round trip).
+
+`./cert.sh` (OpenSSL 3.5+) writes two ML-DSA-44 CAs and a leaf for each into
+`certs/`, all valid for 10 years, with the private keys in the seed-only
+encoding Cloudflare requires. Both CA keys are encrypted with one
+passphrase (`ROOTCA_PASS`, or prompted). It overwrites everything in `certs/`
+on each run, so update the secrets and re-upload to Cloudflare together.
+
+| File                         | Use |
+| ---------------------------- | --- |
+| `aop-ca.crt`, `aop-ca.key`   | AOP CA: `CF_AOP_CA` secret; the key only signs `aop-client.crt` |
+| `aop-client.crt`, `.key`     | Uploaded to Cloudflare as the per-hostname AOP cert |
+| `origin-ca.crt`, `.key`      | COTS CA: uploaded to Cloudflare's Custom Origin Trust Store |
+| `origin.crt`, `origin.key`   | ML-DSA server cert: `ORIGIN_CERT` and `ORIGIN_KEY` secrets, with COTS |
+
+To make nginx's side post-quantum too (COTS needs Advanced Certificate
+Manager, and replaces the publicly trusted CAs and the Origin CA cert for
+the whole zone):
+
+```sh
+# 1. Trust the ML-DSA CA for the zone
+curl -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/acm/custom_trust_store" \
+  -H "Authorization: Bearer $CF_API_TOKEN" -H "Content-Type: application/json" \
+  --data "$(jq -n --rawfile c certs/origin-ca.crt '{certificate: $c}')"
+
+# 2. Serve the ML-DSA server cert
+fly secrets set ORIGIN_CERT="$(cat certs/origin.crt)" ORIGIN_KEY="$(cat certs/origin.key)"
+```
+
+The access log on 8444 (`log_format pq` in `nginx-tls.conf`) shows each
+connection's TLS version, key exchange group and the AOP cert serial
+(`aop_serial=`, matching `openssl x509 -in certs/aop-client.crt -noout -serial`):
+
+```
+203.0.113.7 [...] "GET / HTTP/1.1" 200 1234 TLSv1.3 X25519MLKEM768 TLS_AES_256_GCM_SHA384 aop_serial=1017...
+```
 
 Cloudflare's IP ranges are baked into the image at build time: redeploy
 (`fly deploy --ha=false`) when Cloudflare announces new ones.
@@ -280,8 +340,9 @@ on 8443 stays off.
   down cleanly. 512 MB of swap keeps a memory spike from OOM-killing soju
   on the 256 MB VM.
 - Traffic is HTTPS end to end: visitor → Cloudflare (Cloudflare's edge
-  cert) and Cloudflare → nginx (Origin CA cert). Port 8080 is plain HTTP
-  but only on Fly's private network.
+  cert) and Cloudflare → nginx (TLS 1.3, `X25519MLKEM768`, ML-DSA-44 AOP;
+  see [Post-quantum authentication](#post-quantum-authentication)). Port
+  8080 is plain HTTP but only on Fly's private network.
 
 [Fly.io]: https://fly.io/
 [soju]: https://soju.im/
@@ -292,4 +353,6 @@ on 8443 stays off.
 [cloudflare ips]: https://www.cloudflare.com/ips/
 [Cloudflare Origin CA]: https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/
 [Authenticated Origin Pulls]: https://developers.cloudflare.com/ssl/origin-configuration/authenticated-origin-pull/
+[aop ml-dsa]: https://developers.cloudflare.com/changelog/post/2026-06-17-pqc-mldsa-aop-cots/
+[pq origins]: https://blog.cloudflare.com/post-quantum-authentication-to-origins/
 [config file]: https://codeberg.org/emersion/gamja/src/branch/master/doc/config-file.md
