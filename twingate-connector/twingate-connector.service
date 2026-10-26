@@ -1,0 +1,44 @@
+[Unit]
+Description=Twingate Connector
+Documentation=https://www.twingate.com/docs/connectors
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+# TWINGATE_NETWORK, TWINGATE_ACCESS_TOKEN and TWINGATE_REFRESH_TOKEN
+EnvironmentFile=/etc/twingate/connector.conf
+# API socket (twingate-connectorctl) and crash reports
+Environment=TWINGATE_API_ENDPOINT=/run/twingate-connector/connector.sock
+Environment=TWINGATE_CRASH_REPORTING_DIR=/run/twingate-connector/sentry
+ExecStart=/usr/lib/twingate-connector/connectord
+Restart=always
+RestartSec=5
+
+# The connector only makes outbound connections and opens TCP connections
+# to Resources: it needs no privileges. Pinging Resources uses unprivileged
+# ICMP sockets (net.ipv4.ping_group_range, which systemd opens to all
+# groups by default).
+DynamicUser=yes
+RuntimeDirectory=twingate-connector
+RuntimeDirectoryMode=0750
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

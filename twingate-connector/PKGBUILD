@@ -1,0 +1,41 @@
+# Twingate Connector for Arch Linux (x86_64, aarch64), repackaged from the
+# official twingate/connector:1 Docker image: Twingate's setup.sh only
+# supports Debian/Ubuntu and RHEL-style distros. The binaries are linked
+# against glibc, libgcc_s and libsystemd, all of which Arch has.
+#
+# build.sh extracts connectord and connectorctl for both architectures
+# from one image index (_image_digest) into the tarballs below and updates
+# pkgver and the checksums; the tarballs are attached to the GitHub release.
+
+pkgname=twingate-connector
+pkgver=1.94.0
+pkgrel=1
+pkgdesc='Twingate Connector, repackaged from the official Docker image'
+arch=('x86_64' 'aarch64')
+url='https://www.twingate.com/docs/connectors'
+license=('LicenseRef-Twingate')
+depends=('glibc' 'gcc-libs' 'systemd-libs')
+backup=('etc/twingate/connector.conf')
+# Already stripped, and makepkg's strip can't handle the other architecture
+options=('!strip' '!debug')
+
+_image_digest=sha256:4f3fa686c60a8137934848c064be9bbcef0e819eac293135f06f7274ea972ed9
+_release="https://github.com/pbtrung/docker/releases/download/${pkgname}-${pkgver}-${pkgrel}"
+source=('twingate-connector.service'
+        'twingate-connectorctl'
+        'connector.conf')
+source_x86_64=("${_release}/${pkgname}-${pkgver}-x86_64.tar.gz")
+source_aarch64=("${_release}/${pkgname}-${pkgver}-aarch64.tar.gz")
+sha256sums=('0c52bc50d0407158a3afab7d1267271b0d332bb35ac609bb4af388e41fc59fc0'
+            'a55357832cb247883b081e62a8560cbdb11a93d273b0af0d7ad2f433d559ada9'
+            '498322b75f570751bd32b77274e533d4986ee0d37acf7e1afdd9875b03a6228b')
+sha256sums_x86_64=('27b2562e8d3c059020ac0513d2acb71dc43a32ed5a7a442b4c38485223d32c7e')
+sha256sums_aarch64=('1d9b7ae0904c40761e0dd3d1acd1c33480d9dff3a97839f6ed92772ed033851c')
+
+package() {
+  install -Dm755 connectord connectorctl -t "${pkgdir}/usr/lib/${pkgname}/"
+  install -Dm755 twingate-connectorctl -t "${pkgdir}/usr/bin/"
+  install -Dm644 twingate-connector.service -t "${pkgdir}/usr/lib/systemd/system/"
+  # Holds the tokens: root only
+  install -Dm600 connector.conf -t "${pkgdir}/etc/twingate/"
+}

@@ -1,0 +1,5 @@
+#!/bin/sh
+# connectorctl with the API socket of twingate-connector.service, e.g.
+# `sudo twingate-connectorctl health`
+export TWINGATE_API_ENDPOINT="${TWINGATE_API_ENDPOINT:-/run/twingate-connector/connector.sock}"
+exec /usr/lib/twingate-connector/connectorctl "$@"
