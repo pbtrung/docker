@@ -2,10 +2,45 @@ FROM twingate/connector:1 AS twingate
 
 FROM alpine:edge AS builder
 
+# Fail a RUN when any command of a pipe fails, not just the last one
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
+
 ARG GAMJA_REF=latest
+ARG SOJU_REF=latest
+ARG TARGETARCH=amd64
 
 RUN apk update && \
-    apk --no-cache upgrade
+    apk --no-cache upgrade && \
+    apk --no-cache add jq
+
+# soju: static musl build from a pbtrung/soju-rs release (the latest one by
+# default), checked against the release's SHA256SUMS. The release metadata
+# is fetched with ADD, which downloads it on every build: when it changes
+# (a new release), the cached layers below are rebuilt. Fetching it in RUN
+# would reuse the first build's "latest" forever.
+ADD https://api.github.com/repos/pbtrung/soju-rs/releases/latest /tmp/soju-latest.json
+WORKDIR /tmp/soju
+RUN case "${TARGETARCH}" in \
+      amd64) arch=x86_64 ;; \
+      arm64) arch=aarch64 ;; \
+      *) echo "Unsupported architecture ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    if [ "${SOJU_REF}" = latest ]; then \
+      tag="$(jq -er .tag_name /tmp/soju-latest.json)"; \
+    else \
+      tag="$(wget -q -O - "https://api.github.com/repos/pbtrung/soju-rs/releases/tags/${SOJU_REF}" | \
+        jq -er .tag_name)"; \
+    fi && \
+    name="soju-rs-${tag}-${arch}-unknown-linux-musl" && \
+    base="https://github.com/pbtrung/soju-rs/releases/download/${tag}" && \
+    mkdir -p /out/soju && \
+    echo "Downloading $base/$name.tar.gz" && \
+    wget -q "$base/$name.tar.gz" "$base/SHA256SUMS" && \
+    grep " $name.tar.gz\$" SHA256SUMS | sha256sum -c - && \
+    tar -xzf "$name.tar.gz" && \
+    cp "$name/soju" "$name/sojuctl" "$name/LICENSE" /out/soju/ && \
+    printf "%s\n" "$tag" >/out/soju/.version && \
+    { /out/soju/soju -help 2>&1 || true; } | grep -q "^Usage of soju"
 
 # gamja: prebuilt release from pbtrung/gamja, seeded into /data/gamja on
 # first start
@@ -35,14 +70,28 @@ RUN apk --no-cache add patchelf && \
 
 FROM alpine:edge
 
-RUN addgroup -S twingate && \
+# soju keeps uid/gid 1000, as with the Alpine soju package this image used
+# before: an existing /data/soju stays owned by the same user
+RUN addgroup -g 1000 soju && \
+    adduser -u 1000 -G soju -D soju && \
+    addgroup -S twingate && \
     adduser -S -G twingate -H -h /run/twingate twingate
 
+# rclone: copy DB backups off the container (backup-soju.sh, daily by crond).
+# sqlite: inspect databases and take consistent backups from a shell.
 RUN apk update && \
     apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata mailcap nginx su-exec
+    apk --no-cache add ca-certificates tzdata mailcap nginx su-exec \
+      rclone sqlite
 
 COPY --from=builder /out/gamja /usr/share/gamja-dist
+# soju-rs binaries have no built-in config path: the soju and sojuctl
+# wrappers in /usr/local/bin pass -config /etc/soju/config, so sojuctl works
+# without flags inside the container shell.
+COPY --from=builder /out/soju /usr/local/lib/soju
+COPY soju-wrapper.sh /usr/local/bin/soju
+COPY soju-wrapper.sh /usr/local/bin/sojuctl
+COPY soju.conf /etc/soju/config
 COPY --from=builder /out/twingate /opt/twingate
 RUN ln -s /opt/twingate/connectorctl /usr/local/bin/connectorctl
 # Where the connector keeps its API socket and crash reports; connectorctl
@@ -58,9 +107,10 @@ WORKDIR /script
 COPY entrypoint.sh /script/
 COPY nginx.conf /script/nginx.conf
 COPY update-gamja.sh /usr/local/bin/update-gamja.sh
+COPY backup-soju.sh /usr/local/bin/backup-soju.sh
 
-# 8080: nginx (gamja). Keep it private on Northflank: it's reached through
-# the Twingate connector.
-EXPOSE 8080
+# 8080: nginx (gamja + WebSocket), 6667: soju plain IRC. Keep both private
+# on Northflank: they're reached through the Twingate connector.
+EXPOSE 8080 6667/tcp
 
 ENTRYPOINT ["/script/entrypoint.sh"]
