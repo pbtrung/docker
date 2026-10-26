@@ -1,67 +1,88 @@
-# soju + gamja + nginx on Northflank
+# gamja + nginx on Northflank, behind Twingate
 
-A single container image that runs:
+A single container image for [Northflank] that runs:
 
-- [soju] — IRC bouncer (Alpine edge `soju` package)
 - [gamja] — IRC web client, prebuilt release from the [pbtrung/gamja] fork,
   kept on the volume so it can be updated from a shell
-- nginx — serves gamja and proxies the IRC WebSocket (`/socket`) to soju.
-  It replaces [kimchi], which the upstream [soju-containers] repo uses.
+- nginx — serves gamja, `/config.json` and `/healthz` on plain HTTP port
+  8080
+- a [Twingate connector] — the only way in from outside: it only makes
+  outbound connections to Twingate, so no port is public
 
-File uploads (IRCv3 filehost) are disabled: soju has no `file-upload`
-backend and nginx doesn't proxy `/uploads`.
+soju isn't in this image yet: gamja is served, but has no bouncer behind
+it. Point it at one with `GAMJA_CONFIG_JSON` (`server.url`), see the
+[gamja config file] docs.
 
 ```
-browser ──https──▶ Northflank LB ──▶ :8080 nginx ─┬─ /            gamja static files
-                   (TLS terminated)               ├─ /config.json  gamja config
-                                                  ├─ /socket       ─▶ soju 127.0.0.1:8081 (WebSocket)
-                                                  └─ /healthz      200 ok
-                                    :6667 soju plain IRC (private, in-project only)
+browser ─Twingate─▶ connector (same container) ─▶ soju.internal:8080 nginx ─┬─ /            gamja static files
+                                                                            ├─ /config.json  gamja config
+                                                                            └─ /healthz      200 ok
+Northflank health check ──▶ nginx :8080
 ```
-
-Northflank only exposes HTTP ports publicly, so you reach the bouncer through
-gamja in a browser. Port 6667 stays private: other services in the same
-Northflank project can use it, but the internet can't.
 
 `/data` should be a Northflank volume. It holds:
 
 ```
 /data/
-├── soju/main.db      SQLite DB (SOJU_DATA_DIR)
 ├── gamja/            gamja web client (GAMJA_DATA_DIR)
 └── update-gamja.sh   gamja updater, copied on every start
 ```
 
-On every start, `SOJU_DATA_DIR` is recursively chowned to the `soju` user and
-made private to it (`u+rwX,go-rwx`), so a DB copied in as root still works.
-
 ## Files
 
-| File            | Purpose                                                              |
-| --------------- | -------------------------------------------------------------------- |
-| `Dockerfile`    | `builder` stage (alpine:edge) downloads a gamja release and cloudflared; runtime stage on alpine:edge installs soju with `apk` |
-| `entrypoint.sh` | Installs gamja on the volume, writes the soju config from env vars, creates the first admin, starts nginx then soju |
+| File            | Purpose |
+| --------------- | ------- |
+| `Dockerfile`    | `builder` stage (alpine:edge) downloads a gamja release, and copies the Twingate connector (with its glibc libraries) from `twingate/connector:1`; runtime stage on alpine:edge installs nginx with `apk` |
+| `entrypoint.sh` | Installs gamja on the volume, writes the gamja config, maps `TWINGATE_RESOURCE_HOST` to the container's address, starts the Twingate connector, then nginx |
 | `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` (`/data/gamja`) |
-| `nginx.conf`    | Serves gamja, proxies `/socket`, `/healthz`, rate limits |
+| `nginx.conf`    | Serves gamja, `/config.json` and `/healthz`, per-IP limits |
 
 ## Environment variables
 
-| Variable              | Default                                       | Description |
-| --------------------- | --------------------------------------------- | ----------- |
-| `SOJU_HOSTNAME`       | `soju`                                        | Server name shown to clients (gamja: "Connected to soju") |
-| `SOJU_TITLE`          | —                                             | Server title shown to clients |
-| `SOJU_ADMIN_USER`     | —                                             | Admin user created on first start (only while `/data/soju/main.db` doesn't exist) |
-| `SOJU_ADMIN_PASSWORD` | —                                             | Password for that admin user |
-| `SOJU_EXTRA_CONFIG`   | —                                             | Extra soju config lines appended as-is (e.g. `max-user-networks 5`) |
-| `SOJU_CONFIG_FILE`    | —                                             | Path to a complete soju config. If set, the env vars above that build the config are ignored |
-| `GAMJA_CONFIG_JSON`   | `{"server":{"auth":"mandatory","ping":30}}`   | gamja [config file] contents, served at `/config.json` |
-| `SOJU_DATA_DIR`       | `/data/soju`                                  | Where the soju DB (`main.db`) is stored |
-| `GAMJA_DATA_DIR`      | `/data/gamja`                                 | Where gamja is installed; `update-gamja.sh` is copied to its parent directory |
-| `CLOUDFLARED_TOKEN`   | —                                             | Cloudflare Tunnel token. If set, runs cloudflared and binds IRC to loopback |
+| Variable                 | Default                                     | Description |
+| ------------------------ | ------------------------------------------- | ----------- |
+| `TWINGATE_NETWORK`       | —                                           | Twingate network name (the `<network>` of `<network>.twingate.com`) |
+| `TWINGATE_ACCESS_TOKEN`  | —                                           | Connector access token. **Secret** |
+| `TWINGATE_REFRESH_TOKEN` | —                                           | Connector refresh token. **Secret**. The connector only starts when all three are set; the tokens are removed from the environment before nginx starts |
+| `TWINGATE_RESOURCE_HOST` | `soju.internal`                             | Name of the Twingate Resource: mapped to the container's own IPv4 address in `/etc/hosts` on every start |
+| `GAMJA_CONFIG_JSON`      | `{"server":{"auth":"mandatory","ping":30}}` | gamja [config file] contents, served at `/config.json` |
+| `GAMJA_DATA_DIR`         | `/data/gamja`                               | Where gamja is installed; `update-gamja.sh` is copied to its parent directory |
 
 Build argument: `GAMJA_REF` (default `latest`) selects the gamja release tag
 bundled in the image. It's only installed on a volume that doesn't have gamja
-yet. soju comes from the Alpine edge package.
+yet.
+
+## Twingate
+
+### Why a name, not an IP
+
+On Fly.io the Resource is a fixed IP added to loopback. A Northflank
+container can't do that (no `NET_ADMIN`), and its own address changes with
+every restart. So the Resource is a name, `TWINGATE_RESOURCE_HOST`
+(`soju.internal`): on every start, `entrypoint.sh` maps it to the
+container's IPv4 address in `/etc/hosts`, which the connector reads (glibc,
+with `hosts: files dns` in `/etc/nsswitch.conf`). nginx listens on all
+addresses. The startup log shows `Twingate Resource soju.internal is <ip>`.
+
+### Set up
+
+In the Twingate admin console:
+
+1. Add a Remote Network (e.g. `northflank`) and a connector in it; choose
+   Docker and generate tokens. Use a Remote Network of its own: its
+   connector can only reach this container.
+2. Add a Resource in that Remote Network with the address `soju.internal`
+   and port `8080`, and give your group access to it.
+
+Each Resource name can only be used once across Remote Networks: if another
+one already has a `soju.internal` Resource, set `TWINGATE_RESOURCE_HOST`
+to another name here.
+
+From a device running the Twingate client, gamja is at
+`http://soju.internal:8080`. The browser must resolve the name through the
+system resolver, i.e. the Twingate client: turn off its own secure DNS (DoH),
+or it gets `DNS_PROBE_FINISHED_NXDOMAIN`. Twingate's Secure DNS keeps the
+lookups encrypted.
 
 ## Deploy on Northflank (web UI)
 
@@ -87,134 +108,66 @@ from Git and deploys in one service).
   - **Build context:** `/soju-nf`
   - (optional) **Build arguments:** `GAMJA_REF` to pin a gamja release
     tag instead of the latest
-- **Resources:** the smallest compute plan is enough. **Instances: 1.**
+- **Resources:** the smallest compute plan is enough. **Instances: 1**: a
+  second instance would run a second connector with the same tokens.
 
 ### 4. Networking
 
-Northflank reads `EXPOSE` from the Dockerfile. Check the **Ports** section:
-
-| Port | Protocol | Public |
-| ---- | -------- | ------ |
-| 8080 | HTTP     | **Yes** — gives you a `*.code.run` URL with TLS |
-| 6667 | TCP      | No (Northflank can't make TCP ports public) |
-
-If 8080 wasn't detected, add it by hand as **HTTP** and turn on **Publicly
-expose this port to the internet**.
+Northflank reads `EXPOSE` from the Dockerfile and adds port 8080. Keep it
+**private**: turn off **Publicly expose this port to the internet**.
+Twingate reaches it from inside the container, and the health check
+doesn't need it public either.
 
 ### 5. Environment variables
 
-Under **Environment variables** (runtime), add:
+Under **Environment variables** (runtime), add the Twingate values, as
+**secrets** for the tokens:
 
 ```
-SOJU_ADMIN_USER=admin
-SOJU_ADMIN_PASSWORD=<a strong password>
-SOJU_TITLE=My IRC
+TWINGATE_NETWORK=<network>
+TWINGATE_ACCESS_TOKEN=<access token>
+TWINGATE_REFRESH_TOKEN=<refresh token>
 ```
 
-Click **Create service**. The build only installs packages and downloads
-releases, so it takes about a minute.
+Click **Create service**. The startup log shows
+`Starting the Twingate connector for network <network>`, then the
+connector's `State: Online`; the connector also shows as connected in the
+admin console.
 
 ### 6. Add a persistent volume
 
-Without a volume, every redeploy wipes the database and all users.
+Without a volume, every redeploy reinstalls the gamja bundled in the image,
+undoing `update-gamja.sh`.
 
 Open the service → **Volumes → Add volume**:
 
 - **Name:** `soju-data`
-- **Size:** 1 GB is plenty to start
+- **Size:** 1 GB is plenty
 - **Mount path:** `/data`
-
-Save. The service restarts with the volume attached. A service with a volume
-runs a single instance, which is what soju needs anyway.
-
-> Order matters: the admin user is created only when `/data/soju/main.db` doesn't
-> exist yet. If the service started before the volume was attached, that
-> first admin was written to the container's temporary disk. After you attach
-> the volume, the service restarts, sees an empty `/data` and creates the
-> admin again on the volume. Both outcomes are fine.
 
 ### 7. Health check (recommended)
 
 Service → **Health checks → Add health check**:
 
 - **Protocol:** HTTP, **Port:** 8080, **Path:** `/healthz`
-- Type: readiness and/or liveness
-
-### 8. Public URL
-
-The public URL is in the service's **Ports / DNS** section, e.g.
-`https://p01--soju--abcd1234.code.run`. The server name shown in gamja
-("Connected to soju") comes from `SOJU_HOSTNAME`, which defaults to `soju`.
-
-**Custom domain (optional):** add it under the service's port **Domains**
-(or the team's **Domains** page). Create the DNS record Northflank shows you
-and wait for it to verify. Set `SOJU_HOSTNAME` to it too, if you want it
-shown as the server name.
-
-### 9. Log in
-
-Open the public URL. gamja loads. Log in with `SOJU_ADMIN_USER` /
-`SOJU_ADMIN_PASSWORD`.
-
-Add an upstream IRC network. Either use gamja's "add network" UI, or message
-`BouncerServ`:
-
-```
-/msg BouncerServ network create -addr ircs://irc.libera.chat -name libera -nick yournick
-```
-
-To connect to the network as `yournick` on Libera.Chat (SASL):
-
-```
-/msg BouncerServ sasl set-plain -network libera yournick <nickserv-password>
-```
-
-`/msg BouncerServ help` lists every command.
-
-You can remove `SOJU_ADMIN_PASSWORD` from the env vars now. It's only used on
-the very first start.
-
-### 10. Manage users
-
-As an admin in gamja:
-
-```
-/msg BouncerServ user create -username bob -password <password>
-/msg BouncerServ user status
-```
-
-Or open a shell on the running container from the Northflank UI (service →
-**Containers** → the container's **Shell** / terminal button) and run:
-
-```
-sojuctl user create -username bob -password <password>
-sojuctl user status
-```
-
-`sojuctl` and `sojudb` already know where the config is (`/etc/soju/config`).
+- Type: readiness and/or liveness. Liveness restarts the container if
+  nginx stops answering.
 
 ### Updating
 
-- Pushing to `main` triggers a rebuild and redeploy automatically.
-- To pick up a new soju package from Alpine edge without changing this
-  repo, start a new build manually from the service's **Builds** tab.
+- Pushing to `main` triggers a rebuild and redeploy automatically, which
+  also picks up the latest `1.x` Twingate connector.
 - gamja is updated from a shell instead (see
   [Updating gamja](#updating-gamja)). A new image doesn't replace the copy
   on the volume.
-- The database lives on the volume, so it survives redeploys. soju migrates
-  its schema itself on startup.
-
-### Backups
-
-From the volume's page, take a backup or set up scheduled backups. The data
-lives in `/data/soju/main.db`.
 
 ## Updating gamja
 
 gamja is served from `/data/gamja`. On the first start the entrypoint copies
 the release bundled in the image there, and on every start it copies
 `update-gamja.sh` to `/data`. To switch to another release of
-[pbtrung/gamja] without a new image, open a shell on the container and run:
+[pbtrung/gamja] without a new image, open a shell on the container
+(service → **Containers** → **Shell**) and run:
 
 ```sh
 /data/update-gamja.sh           # latest release
@@ -228,74 +181,29 @@ swaps the two directories, so nginx never serves a half-installed tree. The
 installed tag is in `/data/gamja/.version`. Reload gamja in the browser
 afterwards. No restart is needed.
 
-## Cloudflare Tunnel (optional)
-
-If `CLOUDFLARED_TOKEN` is set, the entrypoint:
-
-1. binds soju's plain IRC listener to `127.0.0.1:6667` instead of
-   `0.0.0.0:6667`, so nothing outside the container can reach it directly
-2. runs `cloudflared tunnel --no-autoupdate run --token $CLOUDFLARED_TOKEN`
-   in the background
-
-cloudflared only makes outbound connections to Cloudflare, so it needs no
-public or inbound port on Northflank. The public web UI on 8080 keeps working.
-
-cloudflared's logs appear in the container console. If cloudflared exits
-for any reason (bad token, crash), the container stops too and Northflank
-restarts it, so the service never keeps running without its tunnel.
-
-Set it up in the Cloudflare Zero Trust dashboard:
-
-1. **Networks → Tunnels → Create a tunnel**, type **Cloudflared**. Name it
-   (e.g. `soju`).
-2. Copy the token from the install command shown (the long string after
-   `--token`). In Northflank, add it as a **secret** environment variable
-   `CLOUDFLARED_TOKEN` and save. The service restarts, and the tunnel shows
-   as **Healthy** in the dashboard.
-3. Add a **public hostname** route to the tunnel, for example:
-   - `irc.example.org` → `tcp://localhost:6667` for native IRC clients. On
-     each client machine, run
-     `cloudflared access tcp --hostname irc.example.org --url localhost:6667`,
-     then point the IRC client at `localhost:6667`.
-   - `chat.example.org` → `http://localhost:8080` to serve gamja on your own
-     domain through Cloudflare.
-
-The routes live in Cloudflare (a remotely managed tunnel), so changing them
-needs no redeploy.
-
 ## Run locally
 
 ```sh
-docker build -t soju soju-nf/
-docker run --rm -p 8080:8080 -p 6667:6667 -v soju-data:/data \
-  -e SOJU_ADMIN_USER=admin -e SOJU_ADMIN_PASSWORD=changeme \
-  soju
+docker build -t soju-nf soju-nf/
+docker run --rm -p 8080:8080 -v soju-nf-data:/data soju-nf
 ```
 
-Then open http://localhost:8080. You can also point a native IRC client at
-`localhost:6667` (plain text, no TLS, password `changeme`).
+Then open http://localhost:8080. Without the `TWINGATE_*` variables, the
+connector stays off.
 
 ## Notes
 
-- **Native IRC clients** (irssi, WeeChat, …) can't reach port 6667 from the
-  internet on Northflank, because it only exposes HTTP ports. Use gamja.
-  Clients that support IRC over WebSocket can connect to
-  `wss://<host>/socket`.
-- gamja sends `PING` every 30 s by default (`GAMJA_CONFIG_JSON`). This keeps
-  idle WebSockets from being cut by load balancer timeouts.
-- nginx recovers the client IP from the `X-Forwarded-For` set by cloudflared
-  or the Northflank load balancer (`real_ip_*`), so rate limits apply per
-  client, and forwards it to soju as a single address. soju trusts it from
-  loopback (`accept-proxy-ip localhost`). Don't forward the whole
-  `client, proxy` list: soju uses the header as-is for the client host, and
-  the space in it breaks the IRC prefixes it sends (gamja then misses its own
-  JOINs after a reload).
-- soju follows the Alpine edge package, so each rebuild picks up whatever
-  version edge ships.
+- Through Twingate, nginx sees every client at the connector's address, so
+  the per-IP limits apply to all Twingate users together: 60 requests per
+  minute for gamja's files (burst 30) and 20 concurrent connections.
+- The connector runs as the `twingate` user, restarted 5 s after it exits.
+  nginx is the main process: if it exits, the container stops and
+  Northflank restarts it.
+- `connectorctl health` in a shell on the container checks the connector.
 
-[soju]: https://soju.im/
+[Northflank]: https://northflank.com/
 [gamja]: https://codeberg.org/emersion/gamja
 [pbtrung/gamja]: https://github.com/pbtrung/gamja
-[kimchi]: https://codeberg.org/emersion/kimchi
-[soju-containers]: https://codeberg.org/emersion/soju-containers
+[Twingate connector]: https://www.twingate.com/docs/connectors
+[gamja config file]: https://codeberg.org/emersion/gamja/src/branch/master/doc/config-file.md
 [config file]: https://codeberg.org/emersion/gamja/src/branch/master/doc/config-file.md

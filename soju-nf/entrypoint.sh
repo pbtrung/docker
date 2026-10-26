@@ -1,26 +1,8 @@
 #!/bin/sh
 set -e
 
-# Persistent volume, mounted at /data: the SQLite DB in /data/soju and
-# gamja in /data/gamja.
-SOJU_DATA_DIR="${SOJU_DATA_DIR:-/data/soju}"
+# Persistent volume, mounted at /data: gamja in /data/gamja.
 GAMJA_DATA_DIR="${GAMJA_DATA_DIR:-/data/gamja}"
-SOJU_CONF=/etc/soju/config
-
-mkdir -p /etc/soju /run/soju "$SOJU_DATA_DIR"
-
-# With a Cloudflare Tunnel, IRC only listens on loopback: the only way in
-# from outside is through cloudflared.
-if [ -n "$CLOUDFLARED_TOKEN" ]; then
-  IRC_LISTEN="irc+insecure://127.0.0.1:6667"
-else
-  IRC_LISTEN="irc+insecure://0.0.0.0:6667"
-fi
-# -R: the DB (and its -wal/-shm files) may have been copied in as root.
-# Only soju needs to read it (it holds password hashes and network secrets).
-chown -R soju:soju "$SOJU_DATA_DIR"
-chmod -R u+rwX,go-rwx "$SOJU_DATA_DIR"
-chown soju:soju /run/soju
 
 # gamja lives on the volume so it can be updated without a new image: run
 # update-gamja.sh (copied next to $GAMJA_DATA_DIR) from a shell. Seed it from
@@ -42,71 +24,55 @@ UPDATE_GAMJA="$(dirname "$GAMJA_DATA_DIR")/update-gamja.sh"
 cp /usr/local/bin/update-gamja.sh "$UPDATE_GAMJA"
 chmod +x "$UPDATE_GAMJA"
 
-# soju config: use SOJU_CONFIG_FILE as-is if given (e.g. a Northflank secret
-# file), otherwise render one from environment variables.
-if [ -n "$SOJU_CONFIG_FILE" ]; then
-  if [ ! -f "$SOJU_CONFIG_FILE" ]; then
-    printf "SOJU_CONFIG_FILE %s does not exist\n" "$SOJU_CONFIG_FILE"
-    exit 1
-  fi
-  cp "$SOJU_CONFIG_FILE" "$SOJU_CONF"
-else
-  # Server name shown to clients (gamja: "Connected to soju"). Without it,
-  # soju would use the container hostname, i.e. the Kubernetes pod name.
-  SOJU_HOSTNAME="${SOJU_HOSTNAME:-soju}"
-  {
-    printf "db sqlite3 %s/main.db\n" "$SOJU_DATA_DIR"
-    printf "message-store db\n"
-    printf "listen %s\n" "$IRC_LISTEN"
-    printf "listen http+insecure://127.0.0.1:8081\n"
-    printf "listen unix+admin:///run/soju/admin\n"
-    # nginx forwards X-Forwarded-For from loopback
-    printf "accept-proxy-ip localhost\n"
-    printf "hostname %s\n" "$SOJU_HOSTNAME"
-    [ -n "$SOJU_TITLE" ] && printf "title %s\n" "$SOJU_TITLE"
-    [ -n "$SOJU_EXTRA_CONFIG" ] && printf "%s\n" "$SOJU_EXTRA_CONFIG"
-    true
-  } >"$SOJU_CONF"
-fi
-chmod 644 "$SOJU_CONF"
-printf "soju config:\n"
-sed 's/^/  /' "$SOJU_CONF"
-
-# Bootstrap the first admin user on an empty database.
-if [ -n "$SOJU_ADMIN_USER" ] && [ -n "$SOJU_ADMIN_PASSWORD" ] && [ ! -f "$SOJU_DATA_DIR/main.db" ]; then
-  printf "Creating admin user %s\n" "$SOJU_ADMIN_USER"
-  printf "%s\n" "$SOJU_ADMIN_PASSWORD" |
-    su-exec soju sojudb -config "$SOJU_CONF" create-user "$SOJU_ADMIN_USER" -admin
-fi
-
 # gamja config, served at /config.json.
 # Default: always ask for a password, PING every 30s so idle WebSockets
-# aren't dropped by the Northflank load balancer.
+# aren't dropped by NAT or proxies along the way.
 printf "%s\n" "${GAMJA_CONFIG_JSON:-{\"server\":{\"auth\":\"mandatory\",\"ping\":30\}\}}" >/tmp/gamja-config.json
 
-# Cloudflare Tunnel (remotely managed): routes such as tcp://localhost:6667
-# or http://localhost:8080 are configured in the Cloudflare dashboard.
-# cloudflared only makes outbound connections, so no inbound port is needed.
-# Its logs go straight to the container console. If it exits, stop the
-# container: PID 1 becomes soju after the final exec, so wait for that (a
-# fast failure would otherwise signal the shell, which PID 1 ignores), then
-# SIGTERM it so soju shuts down cleanly.
-if [ -n "$CLOUDFLARED_TOKEN" ]; then
-  printf "Starting cloudflared tunnel\n"
+# Twingate connector: the only way in from outside. It only makes outbound
+# connections, so no port needs to be public. Started in a loop that
+# restarts it whenever it exits. Its state (API socket, crash reports)
+# lives in /run/twingate (TWINGATE_API_ENDPOINT and
+# TWINGATE_CRASH_REPORTING_DIR, set in the Dockerfile).
+if [ -n "$TWINGATE_NETWORK" ] && [ -n "$TWINGATE_ACCESS_TOKEN" ] && [ -n "$TWINGATE_REFRESH_TOKEN" ]; then
+  # The Twingate Resource is a name, TWINGATE_RESOURCE_HOST, that resolves
+  # to this container's own IPv4 address here. The address changes with
+  # every restart and the container can't add a fixed one (no NET_ADMIN on
+  # Northflank), so map the name in /etc/hosts on every start. nginx listens
+  # on all addresses.
+  TWINGATE_RESOURCE_HOST="${TWINGATE_RESOURCE_HOST:-soju.internal}"
+  pod_ip="$(ip -4 route get 1.1.1.1 2>/dev/null |
+    sed -n 's/.* src \([0-9.]*\).*/\1/p')"
+  if [ -n "$pod_ip" ] &&
+    { grep -v "[[:space:]]$TWINGATE_RESOURCE_HOST\$" /etc/hosts
+      printf "%s\t%s\n" "$pod_ip" "$TWINGATE_RESOURCE_HOST"; } >/tmp/hosts &&
+    cat /tmp/hosts >/etc/hosts; then
+    printf "Twingate Resource %s is %s\n" "$TWINGATE_RESOURCE_HOST" "$pod_ip"
+  else
+    printf "Can't map %s in /etc/hosts, the Twingate Resource won't resolve\n" \
+      "$TWINGATE_RESOURCE_HOST"
+  fi
+  rm -f /tmp/hosts
+
+  mkdir -p /run/twingate
+  chown twingate:twingate /run/twingate
+  chmod 700 /run/twingate
+  printf "Starting the Twingate connector for network %s\n" "$TWINGATE_NETWORK"
   (
-    status=0
-    su-exec soju cloudflared tunnel --no-autoupdate --loglevel info \
-      run --token "$CLOUDFLARED_TOKEN" || status=$?
-    printf "cloudflared exited with status %s, stopping container\n" "$status"
-    while [ "$(cat /proc/1/comm)" != soju ]; do sleep 1; done
-    kill -TERM 1
+    while :; do
+      su-exec twingate /opt/twingate/connectord || true
+      printf "Twingate connector exited, restarting in 5 s\n"
+      sleep 5
+    done
   ) &
 else
-  printf "CLOUDFLARED_TOKEN not set, skipping cloudflared\n"
+  printf "TWINGATE_NETWORK, TWINGATE_ACCESS_TOKEN or TWINGATE_REFRESH_TOKEN not set, Twingate connector disabled\n"
 fi
+# Only the connector needs the tokens: keep them out of nginx's environment
+unset TWINGATE_ACCESS_TOKEN TWINGATE_REFRESH_TOKEN
 
+# nginx is the main process: if it exits, the container stops and Northflank
+# restarts it
 NGINX_CONF="${NGINX_CONF:-/script/nginx.conf}"
 printf "Starting nginx with config: %s\n" "$NGINX_CONF"
-nginx -c "$NGINX_CONF"
-
-exec su-exec soju soju -config "$SOJU_CONF"
+exec nginx -c "$NGINX_CONF" -g "daemon off;"
