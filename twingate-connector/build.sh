@@ -47,8 +47,6 @@ sed -i "s/^pkgver=.*/pkgver=$version/; s/^_image_digest=.*/_image_digest=$digest
 if [ "$old" != "$version" ]; then
   sed -i 's/^pkgrel=.*/pkgrel=1/' PKGBUILD
 fi
-# The tarballs are in this directory, so makepkg uses them instead of
-# downloading them from the release
 updpkgsums
 
 PACKAGER="${PACKAGER:-$(git config user.name) <$(git config user.email)>}"

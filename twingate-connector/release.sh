@@ -1,7 +1,7 @@
 #!/bin/sh
-# Publish the tarballs and packages from build.sh as a GitHub release,
-# tagged twingate-connector-<pkgver>-<pkgrel>: the PKGBUILD's sources point
-# there. Commit and push the PKGBUILD first, so the tag matches it.
+# Publish the packages from build.sh as a GitHub release, tagged
+# twingate-connector-<pkgver>-<pkgrel>. Commit and push the PKGBUILD first,
+# so the tag matches it.
 set -eu
 
 cd "$(dirname "$0")"
@@ -22,8 +22,6 @@ if [ "$(git rev-parse HEAD)" != "$(git rev-parse '@{u}')" ]; then
 fi
 
 set -- \
-  "twingate-connector-$pkgver-x86_64.tar.gz" \
-  "twingate-connector-$pkgver-aarch64.tar.gz" \
   "twingate-connector-$pkgver-$pkgrel-x86_64.pkg.tar.zst" \
   "twingate-connector-$pkgver-$pkgrel-aarch64.pkg.tar.zst"
 for f in "$@"; do
@@ -35,10 +33,7 @@ from the official Docker image \`twingate/connector@$digest\`.
 
 \`\`\`sh
 sudo pacman -U twingate-connector-$pkgver-$pkgrel-\$(uname -m).pkg.tar.zst
-\`\`\`
-
-The \`.tar.gz\` files hold the extracted \`connectord\` and \`connectorctl\`:
-the PKGBUILD's sources."
+\`\`\`"
 
 gh release create "$tag" --target "$(git rev-parse HEAD)" \
   --title "twingate-connector $pkgver-$pkgrel" --notes "$notes" "$@"

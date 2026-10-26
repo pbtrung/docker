@@ -4,8 +4,9 @@
 # against glibc, libgcc_s and libsystemd, all of which Arch has.
 #
 # build.sh extracts connectord and connectorctl for both architectures
-# from one image index (_image_digest) into the tarballs below and updates
-# pkgver and the checksums; the tarballs are attached to the GitHub release.
+# from one image index (_image_digest) into the local tarballs below, updates
+# pkgver and the checksums, and builds the packages. Only the packages are
+# released.
 
 pkgname=twingate-connector
 pkgver=1.94.0
@@ -20,12 +21,11 @@ backup=('etc/twingate/connector.conf')
 options=('!strip' '!debug')
 
 _image_digest=sha256:4f3fa686c60a8137934848c064be9bbcef0e819eac293135f06f7274ea972ed9
-_release="https://github.com/pbtrung/docker/releases/download/${pkgname}-${pkgver}-${pkgrel}"
 source=('twingate-connector.service'
         'twingate-connectorctl'
         'connector.conf')
-source_x86_64=("${_release}/${pkgname}-${pkgver}-x86_64.tar.gz")
-source_aarch64=("${_release}/${pkgname}-${pkgver}-aarch64.tar.gz")
+source_x86_64=("${pkgname}-${pkgver}-x86_64.tar.gz")
+source_aarch64=("${pkgname}-${pkgver}-aarch64.tar.gz")
 sha256sums=('0c52bc50d0407158a3afab7d1267271b0d332bb35ac609bb4af388e41fc59fc0'
             'a55357832cb247883b081e62a8560cbdb11a93d273b0af0d7ad2f433d559ada9'
             '498322b75f570751bd32b77274e533d4986ee0d37acf7e1afdd9875b03a6228b')

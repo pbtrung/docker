@@ -56,9 +56,9 @@ Resources and pings them with unprivileged ICMP sockets
 
 | File | Purpose |
 | ---- | ------- |
-| `PKGBUILD` | Package definition. Its arch sources are the tarballs attached to the GitHub release; `_image_digest` records the image index they came from |
+| `PKGBUILD` | Package definition. Its arch sources are the local tarballs from `build.sh` (not in git or the release); `_image_digest` records the image index they came from |
 | `build.sh` | Pulls the image's amd64 and arm64 variants from one index digest, extracts the binaries into `twingate-connector-<version>-<arch>.tar.gz`, updates `pkgver`, `_image_digest` and the checksums, and builds both packages |
-| `release.sh` | Creates the GitHub release `twingate-connector-<pkgver>-<pkgrel>` with the tarballs and packages |
+| `release.sh` | Creates the GitHub release `twingate-connector-<pkgver>-<pkgrel>` with the two packages |
 | `twingate-connector.service`, `twingate-connectorctl`, `connector.conf` | Installed by the package |
 
 ## New version
