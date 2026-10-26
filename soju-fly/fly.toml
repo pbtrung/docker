@@ -1,26 +1,27 @@
-# The app name isn't in the repo: it's part of the app's fly.dev hostname,
-# which would let anyone reach the app without going through Cloudflare.
-# flyctl takes it from FLY_APP, kept in the git-ignored .env (see README).
+# The app name isn't in the repo (it names the app's fly.dev hostname and
+# .internal address); flyctl takes it from FLY_APP, kept in the git-ignored
+# .env (see README).
 primary_region = 'iad'
 
 # soju is a bouncer: it must stay connected to the upstream IRC networks,
 # so the app runs exactly one machine, always on:
-# - no autoscaling: the one service (HTTPS on 443) has auto-stop and
-#   auto-start off, so the Fly proxy never stops or starts the machine
+# - no autoscaling: there's no service, so the Fly proxy never stops,
+#   starts or creates machines
 # - the volume attaches to one machine only, and soju can't run as several
 #   instances; deploy with --ha=false so the first deploy creates one
 #   machine, not two, and check with `fly scale show` (`fly scale count 1`)
 # - [[restart]] brings it back whenever soju exits or the machine crashes
-# gamja (8080) and IRC (6667) are only reachable over Fly's private network.
-# gamja is also public on 443, through Cloudflare only (see [[services]]
-# below).
+# No public ports: there is no [[services]] section, so the Fly proxy routes
+# nothing to the machine, whatever IPs the app has. gamja (8080) and IRC
+# (6667) are reached through the Twingate connector running on the machine,
+# which only makes outbound connections, or over Fly's private network.
 
 # soju shuts down cleanly on SIGTERM: it closes the upstream connections
 # and flushes the DB
 kill_signal = 'SIGTERM'
 kill_timeout = '30s'
 
-# 256 MB is tight for soju + nginx; swap keeps a spike from OOM-killing soju
+# 256 MB is tight for soju, nginx and the Twingate connector; swap keeps a spike from OOM-killing soju
 swap_size_mb = 512
 
 [build]
@@ -56,40 +57,3 @@ swap_size_mb = 512
 [[vm]]
   size = 'shared-cpu-1x'
   memory = '256mb'
-
-# HTTPS through Cloudflare. The Fly proxy passes the TCP stream through
-# with a PROXY protocol header carrying the real peer address (proxy_proto
-# handler): nginx's stream block on 8443 rejects anything not from
-# Cloudflare's IPs (nginx-stream.conf), then the HTTPS server terminates TLS
-# with the Cloudflare Origin CA cert and requires Cloudflare's Authenticated
-# Origin Pulls client cert (nginx-tls.conf). The certs come from the ORIGIN_CERT,
-# ORIGIN_KEY and CF_AOP_CA secrets, written by entrypoint.sh.
-# Raw TCP only works on a dedicated IP: point Cloudflare at the app's
-# dedicated IPv6 (proxied AAAA record), not the shared IPv4.
-[[services]]
-  protocol = 'tcp'
-  internal_port = 8443
-  # No autoscaling, min = max = 1 machine: the Fly proxy never stops or
-  # starts machines ([[restart]] brings soju back), and it never creates
-  # any (it can't). The count is set by `fly deploy --ha=false` and
-  # `fly scale count 1`.
-  auto_stop_machines = 'off'
-  auto_start_machines = false
-  min_machines_running = 1
-
-  # Cap the TCP connections the Fly proxy sends to the machine, so a flood
-  # can't pile unlimited connections onto it. Counted per connection, not
-  # per request: there's no http handler. Each gamja tab holds one
-  # WebSocket connection for as long as it's open.
-  [services.concurrency]
-    type = 'connections'
-    soft_limit = 30
-    hard_limit = 30
-
-  [[services.ports]]
-    port = 443
-    handlers = ['proxy_proto']
-
-  # No service check: Fly's checks connect to 8443 without the PROXY
-  # protocol header nginx requires there, which logs a "broken header" error
-  # every time. The HTTP check on 8080 ([checks.nginx]) covers nginx.

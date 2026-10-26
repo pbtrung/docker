@@ -1,3 +1,5 @@
+FROM twingate/connector:1 AS twingate
+
 FROM alpine:edge AS builder
 
 # Fail a RUN when any command of a pipe fails, not just the last one
@@ -49,40 +51,51 @@ ADD https://api.github.com/repos/pbtrung/gamja/releases/latest /tmp/gamja-latest
 COPY update-gamja.sh /usr/local/bin/
 RUN GAMJA_DATA_DIR=/out/gamja update-gamja.sh "${GAMJA_REF}"
 
-# Cloudflare's IP ranges, the only sources nginx lets through to 8443
-# (nginx-stream.conf), as "allow" lines. Fetched with ADD on every build,
-# like the releases above. The lists have no final newline; every line must
-# be a CIDR range.
-ADD https://www.cloudflare.com/ips-v4/ /tmp/cf-ips-v4.txt
-ADD https://www.cloudflare.com/ips-v6/ /tmp/cf-ips-v6.txt
-RUN mkdir -p /out/nginx && \
-    { cat /tmp/cf-ips-v4.txt; echo; cat /tmp/cf-ips-v6.txt; echo; } | \
-      tr -d '\r' | sed 's/^ *//;s/ *$//;/^$/d' >/out/nginx/cloudflare-ips.txt && \
-    if grep -Evq '^([0-9.]+|[0-9a-f:]+)/[0-9]+$' /out/nginx/cloudflare-ips.txt; then \
-      echo "Unexpected line in Cloudflare's IP lists:" >&2; \
-      grep -Ev '^([0-9.]+|[0-9a-f:]+)/[0-9]+$' /out/nginx/cloudflare-ips.txt >&2; \
-      exit 1; \
-    fi && \
-    grep -q '\.' /out/nginx/cloudflare-ips.txt && \
-    grep -q ':' /out/nginx/cloudflare-ips.txt && \
-    sed 's/.*/allow &;/' /out/nginx/cloudflare-ips.txt >/out/nginx/cloudflare-allow.conf && \
-    cat /out/nginx/cloudflare-allow.conf
+# Twingate connector: the official image's binaries are linked against glibc,
+# which Alpine doesn't have. Copy them with the glibc libraries they need
+# (from the same image) into /out/twingate, and point their ELF interpreter
+# and RPATH there. DT_RPATH (--force-rpath) rather than RUNPATH, because it
+# also applies to the libraries' own dependencies (libsystemd's libzstd,
+# liblz4, ...), so none of Alpine's musl libraries get loaded.
+COPY --from=twingate /connectord /connectorctl /tmp/twingate/bin/
+COPY --from=twingate /lib/ /tmp/twingate/lib/
+COPY --from=twingate /usr/lib/ /tmp/twingate/usr-lib/
+RUN apk --no-cache add patchelf && \
+    mkdir -p /out/twingate/lib && \
+    cp -a /tmp/twingate/lib/*-linux-gnu*/* /tmp/twingate/usr-lib/*-linux-gnu*/* \
+      /out/twingate/lib/ && \
+    rm -rf /out/twingate/lib/gconv && \
+    ld="$(basename /out/twingate/lib/ld-linux-*.so.*)" && \
+    for bin in connectord connectorctl; do \
+      cp /tmp/twingate/bin/$bin /out/twingate/ && \
+      patchelf --set-interpreter "/opt/twingate/lib/$ld" \
+        --force-rpath --set-rpath /opt/twingate/lib /out/twingate/$bin; \
+    done
 
 FROM alpine:edge
 
 RUN addgroup -g 1000 soju && \
-    adduser -u 1000 -G soju -D soju
+    adduser -u 1000 -G soju -D soju && \
+    addgroup -S twingate && \
+    adduser -S -G twingate -H -h /run/twingate twingate
 
-# nginx-mod-stream: the Cloudflare IP filter in front of TLS.
 # rclone: copy backups off the machine from a shell.
 # sqlite: inspect the soju DB and take consistent backups from a shell.
 RUN apk update && \
     apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata nginx nginx-mod-stream su-exec \
+    apk --no-cache add ca-certificates tzdata nginx su-exec \
       rclone sqlite
 
 COPY --from=builder /out/gamja /usr/share/gamja-dist
-COPY --from=builder /out/nginx/cloudflare-allow.conf /etc/nginx/
+COPY --from=builder /out/twingate /opt/twingate
+RUN ln -s /opt/twingate/connectorctl /usr/local/bin/connectorctl
+# Where the connector keeps its API socket and crash reports; connectorctl
+# (e.g. `connectorctl health` from a shell) finds the socket here
+ENV TWINGATE_API_ENDPOINT=/run/twingate/connector.sock \
+    TWINGATE_CRASH_REPORTING_DIR=/run/twingate/sentry
+# The connector resolves Resources with glibc, which (unlike musl) reads
+# nsswitch.conf: check /etc/hosts first, for soju.internal (entrypoint.sh)
+RUN printf "hosts: files dns\n" >/etc/nsswitch.conf
 # soju-rs binaries have no built-in config path: the soju and sojuctl
 # wrappers in /usr/local/bin pass -config /etc/soju/config, so sojuctl works
 # without flags inside the container shell.
@@ -93,12 +106,11 @@ COPY soju.conf /etc/soju/config
 
 WORKDIR /script
 COPY entrypoint.sh /script/
-COPY nginx.conf nginx-stream.conf nginx-tls.conf gamja-locations.conf /script/
+COPY nginx.conf gamja-locations.conf /script/
 COPY update-gamja.sh /usr/local/bin/update-gamja.sh
 
-# 8080: nginx (gamja + WebSocket), 6667: soju plain IRC. Both are only
-# reachable over Fly's private network.
-# 8443: nginx, public on 443 through Cloudflare (see fly.toml).
-EXPOSE 8080 8443 6667/tcp
+# 8080: nginx (gamja + WebSocket), 6667: soju plain IRC. Neither is public:
+# they're reached through the Twingate connector or Fly's private network.
+EXPOSE 8080 6667/tcp
 
 ENTRYPOINT ["/script/entrypoint.sh"]

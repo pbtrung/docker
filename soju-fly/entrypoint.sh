@@ -73,31 +73,43 @@ fi
 # aren't dropped by NAT or proxies along the way.
 printf "%s\n" "${GAMJA_CONFIG_JSON:-{\"server\":{\"auth\":\"mandatory\",\"ping\":30\}\}}" >/tmp/gamja-config.json
 
-# Public HTTPS through Cloudflare (nginx-stream.conf, nginx-tls.conf):
-# enabled when the Origin CA cert, its key and the Authenticated Origin
-# Pulls CA are all set. Each secret may hold the PEM itself or its base64
-# encoding.
-write_pem() {
-  if printf "%s\n" "$1" | grep -q -- "-----BEGIN"; then
-    printf "%s\n" "$1" >"$2"
-  else
-    printf "%s" "$1" | base64 -d >"$2"
-  fi
-}
-rm -rf /etc/nginx/stream.d /etc/nginx/tls.d
-mkdir -p /etc/nginx/stream.d /etc/nginx/tls.d
-if [ -n "$ORIGIN_CERT" ] && [ -n "$ORIGIN_KEY" ] && [ -n "$CF_AOP_CA" ]; then
-  mkdir -p /etc/certs
-  chmod 755 /etc/certs
-  (umask 077 && write_pem "$ORIGIN_KEY" /etc/certs/origin-key.pem)
-  write_pem "$ORIGIN_CERT" /etc/certs/origin.pem
-  write_pem "$CF_AOP_CA" /etc/certs/cf-aop-ca.pem
-  cp /script/nginx-stream.conf /etc/nginx/stream.d/
-  cp /script/nginx-tls.conf /etc/nginx/tls.d/
-  printf "Enabling HTTPS on 8443 with the Cloudflare IP filter, origin cert and AOP\n"
+# Twingate connector: the only way in from outside. It only makes outbound
+# connections, so the app has no public service. Started in a loop that
+# restarts it whenever it exits; soju is the main process, so a connector
+# crash doesn't take the bouncer down. Its state (API socket, crash reports)
+# lives in /run/twingate (TWINGATE_API_ENDPOINT and
+# TWINGATE_CRASH_REPORTING_DIR, set in the Dockerfile).
+if [ -n "$TWINGATE_NETWORK" ] && [ -n "$TWINGATE_ACCESS_TOKEN" ] && [ -n "$TWINGATE_REFRESH_TOKEN" ]; then
+  # Twingate Resources must be IPv4, and <app>.internal only has an IPv6
+  # (6PN) address. The connector runs on this machine, so give it a fixed
+  # IPv4 of its own on loopback, TWINGATE_RESOURCE_IP: the Resource is that
+  # address (no DNS, so it works with browsers' secure DNS), or
+  # soju.internal, which resolves to it here (Fly writes /etc/hosts at boot,
+  # so add it on every start). 127.0.0.1 can't be the Resource: the client
+  # device would answer it itself. nginx listens on 0.0.0.0:8080, and soju's
+  # [::]:6667 accepts IPv4 too.
+  TWINGATE_RESOURCE_IP="${TWINGATE_RESOURCE_IP:-100.120.10.1}"
+  ip addr show dev lo | grep -q " $TWINGATE_RESOURCE_IP/32 " ||
+    ip addr add "$TWINGATE_RESOURCE_IP/32" dev lo
+  grep -q '[[:space:]]soju\.internal$' /etc/hosts ||
+    printf "%s\tsoju.internal\n" "$TWINGATE_RESOURCE_IP" >>/etc/hosts
+  mkdir -p /run/twingate
+  chown twingate:twingate /run/twingate
+  chmod 700 /run/twingate
+  printf "Starting the Twingate connector for network %s\n" "$TWINGATE_NETWORK"
+  (
+    while :; do
+      su-exec twingate /opt/twingate/connectord || true
+      printf "Twingate connector exited, restarting in 5 s\n"
+      sleep 5
+    done
+  ) &
 else
-  printf "ORIGIN_CERT, ORIGIN_KEY or CF_AOP_CA not set, HTTPS on 8443 disabled\n"
+  printf "TWINGATE_NETWORK, TWINGATE_ACCESS_TOKEN or TWINGATE_REFRESH_TOKEN not set, Twingate connector disabled\n"
 fi
+# Only the connector needs the tokens: keep them out of nginx's and soju's
+# environment
+unset TWINGATE_ACCESS_TOKEN TWINGATE_REFRESH_TOKEN
 
 NGINX_CONF="${NGINX_CONF:-/script/nginx.conf}"
 printf "Starting nginx with config: %s\n" "$NGINX_CONF"
