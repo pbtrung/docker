@@ -13,8 +13,8 @@ find "$WEECHAT_HOME" -type f -iname '*.zst' -delete
 
 files="$(mktemp)"
 trap 'rm -f "$files"' EXIT
-cd "$WEECHAT_HOME"
-find . -type f -iname '*.conf' >"$files"
+cd "$(dirname "$WEECHAT_HOME")"
+find "$(basename "$WEECHAT_HOME")" -type f -iname '*.conf' >"$files"
 if [ ! -s "$files" ]; then
   printf "backup-weechat: no config files found in %s\n" "$WEECHAT_HOME" >&2
   exit 1

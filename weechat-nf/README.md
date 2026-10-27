@@ -312,7 +312,8 @@ destination, for example `tigris:skypiea/weechat/`, and put the matching
 rclone config at `/data/rclone.conf`. There is no default destination.
 Each run recursively deletes all `*.zst` files under `/data/weechat`, creates
 `/data/weechat.tar.gz` containing only regular `*.conf` files from that
-directory and its subdirectories (with relative paths), then uploads it:
+directory and its subdirectories, including the `weechat/` folder level
+(for example, `weechat/weechat.conf`), then uploads it:
 
 ```sh
 rclone --config /data/rclone.conf copy /data/weechat.tar.gz "$WEECHAT_BACKUP_REMOTE"
