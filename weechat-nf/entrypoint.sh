@@ -12,6 +12,7 @@ if [ -z "$WEECHAT_RELAY_PASSWORD" ]; then
   printf "WEECHAT_RELAY_PASSWORD is not set\n"
   exit 1
 fi
+: "${WEECHAT_BACKUP_REMOTE:?WEECHAT_BACKUP_REMOTE is required (rclone upload destination)}"
 
 mkdir -p "$WEECHAT_HOME"
 chown weechat:weechat "$DATA_DIR" "$WEECHAT_HOME"
@@ -30,6 +31,8 @@ fi
 ln -sfn "$GLOWING_BEAR_DIR" /usr/share/glowing-bear
 cp /usr/local/bin/update-glowing-bear.sh "$DATA_DIR/update-glowing-bear.sh"
 chmod +x "$DATA_DIR/update-glowing-bear.sh"
+cp /usr/local/bin/backup-weechat.sh "$DATA_DIR/backup-weechat.sh"
+chmod +x "$DATA_DIR/backup-weechat.sh"
 
 # WeeChat commands run after startup (-r). They are evaluated, so the
 # ${raw:...} wrappers store the ${env:...} references in relay.conf instead of
@@ -133,6 +136,12 @@ else
 fi
 # Only the connector needs the tokens.
 unset TWINGATE_ACCESS_TOKEN TWINGATE_REFRESH_TOKEN
+
+# Run the config backup and rotated-log cleanup daily in the container's
+# time zone. Keep crond and its jobs attached to the container logs.
+printf '0 3 * * * "%s/backup-weechat.sh"\n' "$DATA_DIR" >/etc/crontabs/root
+printf "Scheduling the WeeChat backup daily at 03:00\n"
+busybox crond -f -d 8 &
 
 NGINX_CONF="${NGINX_CONF:-/script/nginx.conf}"
 printf "Starting nginx with config: %s\n" "$NGINX_CONF"

@@ -37,7 +37,7 @@ FROM alpine:edge
 RUN apk update && \
     apk --no-cache upgrade && \
     apk --no-cache add ca-certificates tzdata mailcap nginx su-exec \
-      weechat weechat-lua
+      weechat weechat-lua rclone
 
 RUN addgroup -g 1000 weechat && \
     adduser -u 1000 -G weechat -D weechat && \
@@ -56,6 +56,7 @@ COPY entrypoint.sh /script/
 COPY nginx.conf /script/nginx.conf
 COPY weechat-cmd /usr/local/bin/weechat-cmd
 COPY update-glowing-bear.sh /usr/local/bin/update-glowing-bear.sh
+COPY backup-weechat.sh /usr/local/bin/backup-weechat.sh
 
 # 8080: nginx (Glowing Bear + relay WebSocket), private on Northflank,
 # reached through the Twingate connector.

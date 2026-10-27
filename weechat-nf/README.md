@@ -33,9 +33,10 @@ Northflank volume.
 
 | File            | Purpose |
 | --------------- | ------- |
-| `Dockerfile`    | Downloads a Glowing Bear release and copies the Twingate connector with its glibc libraries from `twingate/connector:1`, as in `soju-fly`; runtime on alpine:edge with WeeChat and weechat-lua from apk |
-| `entrypoint.sh` | Installs Glowing Bear on the volume, applies WeeChat settings, maps the Twingate Resource hostname to the container IPv4, starts the connector and nginx, then runs WeeChat as PID 1 |
+| `Dockerfile`    | Downloads a Glowing Bear release and copies the Twingate connector with its glibc libraries from `twingate/connector:1`, as in `soju-fly`; runtime on alpine:edge with WeeChat, weechat-lua and rclone from apk |
+| `entrypoint.sh` | Installs Glowing Bear and helper scripts on the volume, applies WeeChat settings, maps the Twingate Resource hostname to the container IPv4, starts cron, the connector and nginx, then runs WeeChat as PID 1 |
 | `update-glowing-bear.sh` | Installs a Glowing Bear release (latest, or a given tag) into `/data/glowing-bear` |
+| `backup-weechat.sh` | Archives only WeeChat `*.conf` files, uploads them with rclone and removes rotated `*.zst` logs; run daily by BusyBox crond |
 | `nginx.conf`    | Serves Glowing Bear, proxies `/api`, `/healthz`, rate limits |
 | `weechat-cmd`   | Shell helper that sends a command to the running WeeChat through its FIFO |
 
@@ -121,6 +122,7 @@ Bear to browse them.
 | Variable                     | Default         | Description |
 | ---------------------------- | --------------- | ----------- |
 | `WEECHAT_RELAY_PASSWORD`     | — (**required**) | Password Glowing Bear uses to log in to the relay. The container won't start without it |
+| `WEECHAT_BACKUP_REMOTE`      | — (**required**) | rclone upload destination, e.g. `tigris:skypiea/weechat/`. The container and backup script refuse to run if unset or empty |
 | `WEECHAT_EXTRA_COMMANDS`     | —               | WeeChat commands run on every start, separated by `;` (e.g. `/set weechat.look.buffer_time_format "%H:%M"`) |
 | `DATA_DIR`                   | `/data`         | Persistent volume mount point |
 | `WEECHAT_HOME`               | `$DATA_DIR/weechat` | WeeChat home directory (config, logs, scripts, FIFO) |
@@ -210,6 +212,7 @@ Under **Environment variables** (runtime), add as **secrets**:
 
 ```
 WEECHAT_RELAY_PASSWORD=<a long random password>
+WEECHAT_BACKUP_REMOTE=tigris:skypiea/weechat/
 TWINGATE_NETWORK=<network>
 TWINGATE_ACCESS_TOKEN=<access token>
 TWINGATE_REFRESH_TOKEN=<refresh token>
@@ -299,6 +302,26 @@ They survive redeploys. Python and Perl scripts are unavailable.
 From the volume's page, take a backup or set up scheduled backups.
 Everything lives in `/data`.
 
+The container also runs `/data/backup-weechat.sh` daily at 03:00 in the
+container's time zone (`TZ`, UTC by default), using BusyBox `crond`. The
+entrypoint copies this script to `/data` on every start; run it manually
+from a container shell whenever needed.
+
+Set the required `WEECHAT_BACKUP_REMOTE` environment variable to the upload
+destination, for example `tigris:skypiea/weechat/`, and put the matching
+rclone config at `/data/rclone.conf`. There is no default destination.
+Each run recursively deletes all `*.zst` files under `/data/weechat`, creates
+`/data/weechat.tar.gz` containing only regular `*.conf` files from that
+directory and its subdirectories (with relative paths), then uploads it:
+
+```sh
+rclone --config /data/rclone.conf copy /data/weechat.tar.gz "$WEECHAT_BACKUP_REMOTE"
+```
+
+The archive is deleted after a successful upload and kept if the upload
+fails. Job output goes to the container logs. `DATA_DIR` and `WEECHAT_HOME`
+overrides also apply to the backup script.
+
 ## Shell access
 
 Open a shell on the running container from the Northflank UI (service →
@@ -342,6 +365,7 @@ the browser afterwards. No restart is needed.
 docker build -t weechat weechat-nf/
 docker run --rm -p 8080:8080 -v weechat-data:/data \
   -e WEECHAT_RELAY_PASSWORD=changeme \
+  -e WEECHAT_BACKUP_REMOTE=tigris:skypiea/weechat/ \
   weechat
 ```
 
