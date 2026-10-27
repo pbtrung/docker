@@ -48,6 +48,9 @@ to the container console. That is WeeChat's daemon mode for containers:
 `--daemon` would fork into the background, PID 1 would exit and the container
 would stop. Northflank restarts the container if WeeChat exits.
 
+WeeChat uses mimalloc from Alpine's `mimalloc3` package, preloaded with
+`LD_PRELOAD=/usr/lib/libmimalloc.so.3` when launching `weechat-headless`.
+
 On `docker stop` / redeploy, WeeChat gets `SIGTERM`, saves its config and
 quits cleanly.
 

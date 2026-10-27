@@ -37,7 +37,7 @@ FROM alpine:edge
 RUN apk update && \
     apk --no-cache upgrade && \
     apk --no-cache add ca-certificates tzdata mailcap nginx su-exec \
-      weechat weechat-lua rclone
+      weechat weechat-lua mimalloc3 rclone
 
 RUN addgroup -g 1000 weechat && \
     adduser -u 1000 -G weechat -D weechat && \

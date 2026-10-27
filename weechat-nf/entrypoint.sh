@@ -151,5 +151,6 @@ nginx -c "$NGINX_CONF"
 # console (--stdout). "--daemon" would fork into the background, and the
 # container would exit right away.
 printf "Starting WeeChat in %s\n" "$WEECHAT_HOME"
-exec su-exec weechat weechat-headless --stdout --dir "$WEECHAT_HOME" \
+exec su-exec weechat env LD_PRELOAD=/usr/lib/libmimalloc.so.3 \
+  weechat-headless --stdout --dir "$WEECHAT_HOME" \
   --run-command "$CMDS"
