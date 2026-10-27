@@ -318,6 +318,8 @@ directory and its subdirectories (with relative paths), then uploads it:
 rclone --config /data/rclone.conf copy /data/weechat.tar.gz "$WEECHAT_BACKUP_REMOTE"
 ```
 
+Both extension filters are case-insensitive, so `*.CONF` and `*.ZST` also match.
+
 The archive is deleted after a successful upload and kept if the upload
 fails. Job output goes to the container logs. `DATA_DIR` and `WEECHAT_HOME`
 overrides also apply to the backup script.

@@ -9,12 +9,12 @@ DATA_DIR="${DATA_DIR:-/data}"
 WEECHAT_HOME="${WEECHAT_HOME:-$DATA_DIR/weechat}"
 archive="$DATA_DIR/weechat.tar.gz"
 
-find "$WEECHAT_HOME" -type f -name '*.zst' -delete
+find "$WEECHAT_HOME" -type f -iname '*.zst' -delete
 
 files="$(mktemp)"
 trap 'rm -f "$files"' EXIT
 cd "$WEECHAT_HOME"
-find . -type f -name '*.conf' >"$files"
+find . -type f -iname '*.conf' >"$files"
 if [ ! -s "$files" ]; then
   printf "backup-weechat: no config files found in %s\n" "$WEECHAT_HOME" >&2
   exit 1
