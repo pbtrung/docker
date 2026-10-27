@@ -1,20 +1,23 @@
-# WeeChat + Glowing Bear + nginx on Northflank
+# WeeChat + Glowing Bear + nginx on Northflank, behind Twingate
 
 A single container image that runs:
 
 - [WeeChat] — IRC client, headless (`weechat-headless`), from Alpine edge
-  with the Perl, Python and Lua script plugins
+  with only the Lua script plugin installed (disabled at startup)
 - [Glowing Bear] — WeeChat web client, prebuilt release from the
   [pbtrung/glowing-bear] fork, kept on the volume so it can be updated from a
   shell
 - nginx — serves Glowing Bear and proxies the relay API (`/api`, HTTP and
   WebSocket) to WeeChat's relay
+- a [Twingate connector] — outbound connections only; keep port 8080 private
 
 ```
-browser ──https──▶ Northflank LB ──▶ :8080 nginx ─┬─ /          Glowing Bear static files
-                   (TLS terminated)               ├─ /api       ─▶ WeeChat relay 127.0.0.1:9001 (HTTP + WebSocket)
-                                                  └─ /healthz   200 ok
-                                    WeeChat ──▶ IRC networks (outbound only)
+browser ─Twingate─▶ connector (same container) ─▶ weechat.internal:8080 nginx
+                                                 ├─ /          Glowing Bear static files
+                                                 ├─ /api       ─▶ WeeChat relay 127.0.0.1:9001 (HTTP + WebSocket)
+                                                 └─ /healthz   200 ok
+Northflank health check ──▶ nginx :8080
+WeeChat ──▶ IRC networks (outbound only)
 ```
 
 WeeChat stays connected to your IRC networks around the clock. Glowing Bear
@@ -30,8 +33,8 @@ Northflank volume.
 
 | File            | Purpose |
 | --------------- | ------- |
-| `Dockerfile`    | `builder` stage (alpine:edge) downloads a Glowing Bear release and cloudflared; runtime stage on alpine:edge with WeeChat from apk |
-| `entrypoint.sh` | Installs Glowing Bear on the volume, applies WeeChat settings, starts cloudflared (optional) and nginx, then runs WeeChat as PID 1 |
+| `Dockerfile`    | Downloads a Glowing Bear release and copies the Twingate connector with its glibc libraries from `twingate/connector:1`, as in `soju-fly`; runtime on alpine:edge with WeeChat and weechat-lua from apk |
+| `entrypoint.sh` | Installs Glowing Bear on the volume, applies WeeChat settings, maps the Twingate Resource hostname to the container IPv4, starts the connector and nginx, then runs WeeChat as PID 1 |
 | `update-glowing-bear.sh` | Installs a Glowing Bear release (latest, or a given tag) into `/data/glowing-bear` |
 | `nginx.conf`    | Serves Glowing Bear, proxies `/api`, `/healthz`, rate limits |
 | `weechat-cmd`   | Shell helper that sends a command to the running WeeChat through its FIFO |
@@ -63,12 +66,11 @@ Bear and your change is kept:
 | `irc.look.smart_filter` + filter `irc_smart` | on | Hide join/part/quit from people who haven't spoken recently |
 | `irc.server_default.autojoin_dynamic` | on | Channels you `/join` and `/part` are saved in the autojoin list |
 | `relay.look.auto_open_buffer` | off | Don't open the relay buffer whenever a client connects |
-| `weechat.plugin.autoload` | `*,!xfer` | No DCC, which can't work behind the load balancer |
 | `irc.ctcp.{action,clientinfo,finger,ping,source,time,userinfo,version}` | `""` | Don't answer CTCP requests, which reveal client version, local time, etc. |
 | `irc.server_default.msg_part` / `msg_quit` | `""` | No `WeeChat <version>` part/quit messages |
 | `fifo.file.path` | `${weechat_runtime_dir}/weechat_fifo` | Stable FIFO path for `weechat-cmd` |
 
-The DCC, CTCP and part/quit settings come from atoponce's
+The CTCP and part/quit settings, and disabling DCC below, come from atoponce's
 [WeeChat privacy gist]. Its optional `/mode <nick> -G+g` step (blocking
 private messages from unregistered users) depends on the network and your
 nick, so it isn't applied. Run it yourself after connecting, on networks that
@@ -76,7 +78,20 @@ support it.
 
 Chat logs live in `/data/weechat/logs`.
 
-**On every start**, it enforces the relay settings:
+**On every start**, including existing volumes, it limits each buffer to
+500 history lines and disables automatic loading of scripting plugins and
+DCC:
+
+```
+/set weechat.history.max_buffer_lines_number 500
+/set weechat.plugin.autoload "*,!python,!perl,!ruby,!lua,!tcl,!guile,!javascript,!php,!xfer"
+```
+
+It also unloads these plugins for the current session, since WeeChat loads
+plugins before processing startup commands. Only `weechat-lua` is installed;
+load it explicitly with `/plugin load lua` when needed.
+
+It also enforces the relay settings:
 
 | Setting | Value |
 | ------- | ----- |
@@ -109,12 +124,46 @@ Bear to browse them.
 | `WEECHAT_EXTRA_COMMANDS`     | —               | WeeChat commands run on every start, separated by `;` (e.g. `/set weechat.look.buffer_time_format "%H:%M"`) |
 | `DATA_DIR`                   | `/data`         | Persistent volume mount point |
 | `WEECHAT_HOME`               | `$DATA_DIR/weechat` | WeeChat home directory (config, logs, scripts, FIFO) |
-| `CLOUDFLARED_TOKEN`          | —               | Cloudflare Tunnel token. If set, runs cloudflared |
+| `TWINGATE_NETWORK`          | —               | Twingate network name (`<network>` in `<network>.twingate.com`) |
+| `TWINGATE_ACCESS_TOKEN`     | —               | Connector access token. **Secret** |
+| `TWINGATE_REFRESH_TOKEN`    | —               | Connector refresh token. **Secret**. All three Twingate values are needed to start the connector; tokens are removed from nginx's and WeeChat's environment |
+| `TWINGATE_RESOURCE_HOST`    | `weechat.internal` | Resource hostname, mapped to the container's IPv4 in `/etc/hosts` on every start |
 | `TZ`                         | UTC             | Time zone for timestamps and log files, e.g. `Asia/Ho_Chi_Minh` |
 
 Build argument: `GLOWING_BEAR_REF` (default `latest`) selects the Glowing
 Bear release tag bundled in the image. It's only installed on a volume that
 doesn't have Glowing Bear yet.
+
+## Twingate setup
+
+The connector and its isolated glibc libraries use the setup from
+[soju-fly](../soju-fly). For Northflank, the Resource uses a hostname, as in
+[soju-nf](../soju-nf): the container can't add Fly's fixed loopback IP, and
+its own IPv4 changes on restart. The entrypoint maps `weechat.internal` to
+that IPv4 in `/etc/hosts`; the connector reads it using `hosts: files dns`
+in `/etc/nsswitch.conf`. nginx listens on all IPv4 addresses.
+
+In the Twingate admin console:
+
+1. Add a Remote Network for this container (e.g. `weechat-northflank`), then
+   a connector in it. Choose Docker and generate its access and refresh
+   tokens. Use a separate Remote Network: this connector's Resource name
+   resolves to its own container.
+2. Add a Resource with address `weechat.internal`, restrict it to TCP port
+   `8080`, and give your group access. If that name is already used in your
+   Twingate account, choose another and set `TWINGATE_RESOURCE_HOST` to match.
+3. Add the network name and tokens to the service's environment as below.
+
+With the Twingate client connected, open `http://weechat.internal:8080`.
+Use the browser's system resolver: disable browser secure DNS (DoH) if the
+private name fails to resolve. HTTP and WebSocket traffic travel inside the
+encrypted Twingate tunnel.
+
+The startup log shows `Twingate Resource weechat.internal is <ip>`, then
+`Starting the Twingate connector for network ...` and the connector's
+`State: Online`. Run `connectorctl health` in the container shell to check
+it. The connector runs as `twingate` and restarts 5 seconds after it exits;
+WeeChat stays the main process.
 
 ## Deploy on Northflank (web UI)
 
@@ -140,7 +189,8 @@ from Git and deploys in one service).
   - **Dockerfile location:** `/weechat-nf/Dockerfile`
   - **Build context:** `/weechat-nf`
   - (optional) **Build arguments:** `GLOWING_BEAR_REF` to pin a release tag
-- **Resources:** the smallest compute plan is enough. **Instances: 1.**
+- **Resources:** the smallest compute plan is enough. **Instances: 1**;
+  additional instances would share the connector tokens and WeeChat volume.
 
 ### 4. Networking
 
@@ -148,10 +198,11 @@ Northflank reads `EXPOSE` from the Dockerfile. Check the **Ports** section:
 
 | Port | Protocol | Public |
 | ---- | -------- | ------ |
-| 8080 | HTTP     | **Yes** — gives you a `*.code.run` URL with TLS |
+| 8080 | HTTP     | **No** — reached through Twingate |
 
-If 8080 wasn't detected, add it by hand as **HTTP** and turn on **Publicly
-expose this port to the internet**.
+If 8080 wasn't detected, add it by hand as **HTTP**. Turn off **Publicly
+expose this port to the internet**, including on an existing service.
+Twingate and the health check do not need a public port.
 
 ### 5. Environment variables
 
@@ -159,11 +210,13 @@ Under **Environment variables** (runtime), add as **secrets**:
 
 ```
 WEECHAT_RELAY_PASSWORD=<a long random password>
+TWINGATE_NETWORK=<network>
+TWINGATE_ACCESS_TOKEN=<access token>
+TWINGATE_REFRESH_TOKEN=<refresh token>
 TZ=America/Los_Angeles
 ```
 
-Generate a password with e.g. `openssl rand -base64 24`. The relay is
-reachable from the internet, so make it long.
+Generate a password with e.g. `openssl rand -base64 24`.
 
 Click **Create service**. The build takes a minute or two.
 
@@ -189,20 +242,16 @@ Service → **Health checks → Add health check**:
 
 ### 8. Connect with Glowing Bear
 
-Open the public URL from the service's **Ports / DNS** section, e.g.
-`https://p01--weechat--abcd1234.code.run`. On the Glowing Bear login page:
+With the Twingate client connected, open `http://weechat.internal:8080`.
+On the Glowing Bear login page:
 
-- **Host:** `p01--weechat--abcd1234.code.run` (the path defaults to `api`)
-- **Port:** `443`
+- **Host:** `weechat.internal` (the path defaults to `api`)
+- **Port:** `8080`
 - **Password:** `WEECHAT_RELAY_PASSWORD`
-- **TLS:** on (the default when the page is loaded over https)
+- **TLS:** off (Twingate encrypts the tunnel)
 
 Click **Connect**. To prefill the form, bookmark
-`https://<host>/#host=<host>&port=443&autoconnect=true`.
-
-**Custom domain (optional):** add it under the service's port **Domains**,
-create the DNS record Northflank shows you, then use that hostname in
-Glowing Bear instead.
+`http://weechat.internal:8080/#host=weechat.internal&port=8080&autoconnect=true`.
 
 ### 9. Add an IRC network
 
@@ -224,20 +273,22 @@ With `autojoin_dynamic` on, joined channels are remembered across restarts.
 Settings are saved automatically when WeeChat stops; run `/save` to save
 right away.
 
-### 10. Scripts
+### 10. Lua scripts
 
 ```
-/script install go.py
-/script install autosort.py
+/plugin load lua
 ```
 
-Scripts are installed into `/data/weechat`, so they survive redeploys.
+Only the Lua interpreter is installed, and automatic loading is disabled.
+Keep Lua scripts in `/data/weechat/lua` and load them with `/lua load <file>`.
+They survive redeploys. Python and Perl scripts are unavailable.
 
 ### Updating
 
 - Pushing to `main` triggers a rebuild and redeploy automatically.
 - To pick up new WeeChat or Alpine versions without changing this repo,
   start a new build manually from the service's **Builds** tab.
+- Rebuilds also pick up the latest `1.x` Twingate connector.
 - Glowing Bear is updated from a shell instead (see
   [Updating Glowing Bear](#updating-glowing-bear)). A new image doesn't
   replace the copy on the volume.
@@ -285,35 +336,6 @@ and swaps the two directories, so nginx never serves a half-installed tree.
 The installed tag is in `/data/glowing-bear/.version`. Reload Glowing Bear in
 the browser afterwards. No restart is needed.
 
-## Cloudflare Tunnel (optional)
-
-If `CLOUDFLARED_TOKEN` is set, the entrypoint runs
-`cloudflared tunnel --no-autoupdate run --token $CLOUDFLARED_TOKEN` in the
-background. cloudflared only makes outbound connections to Cloudflare, so it
-needs no public or inbound port on Northflank. The public URL on 8080 keeps
-working.
-
-cloudflared's logs appear in the container console. If cloudflared exits
-for any reason (bad token, crash), the container stops too and Northflank
-restarts it, so the service never keeps running without its tunnel.
-
-Set it up in the Cloudflare Zero Trust dashboard:
-
-1. **Networks → Tunnels → Create a tunnel**, type **Cloudflared**. Name it
-   (e.g. `weechat`).
-2. Copy the token from the install command shown (the long string after
-   `--token`). In Northflank, add it as a **secret** environment variable
-   `CLOUDFLARED_TOKEN` and save. The service restarts, and the tunnel shows
-   as **Healthy** in the dashboard.
-3. Add a **public hostname** route to the tunnel, e.g.
-   `weechat.example.org` → `http://localhost:8080`. Glowing Bear and the
-   relay are then served on your own domain through Cloudflare (connect with
-   `weechat.example.org:443`). You can put a Cloudflare Access policy in
-   front of it for an extra login.
-
-The routes live in Cloudflare (a remotely managed tunnel), so changing them
-needs no redeploy.
-
 ## Run locally
 
 ```sh
@@ -325,16 +347,20 @@ docker run --rm -p 8080:8080 -v weechat-data:/data \
 
 Then open http://localhost:8080 and connect to host `localhost`, port `8080`,
 password `changeme`, **TLS off**.
+Without the three Twingate variables, the connector stays off.
 
 ## Notes
 
 - **Other relay clients** must speak the `api` relay protocol, e.g. WeeChat
-  itself with `/remote add <name> https://<host>:443 -password=<password>`.
+  itself with `/remote add <name> http://weechat.internal:8080 -password=<password>`
+  through Twingate.
   Clients that only speak the older `weechat` protocol (upstream Glowing
   Bear, WeeChat Android) can't connect. The relay's own TCP port is
   loopback-only.
 - nginx allows 20 relay requests per minute per client IP (burst 10) to slow
-  down password guessing. One Glowing Bear login takes 2–3 requests.
+  down password guessing. One Glowing Bear login takes 2–3 requests. Through
+  Twingate, clients share the connector's address, so these limits apply to
+  all Twingate users together.
 - Glowing Bear stores its settings (and the password, if you tick **Save
   password**) in the browser's local storage.
 - `WEECHAT_EXTRA_COMMANDS` runs on every start, so a setting it changes can't
@@ -346,3 +372,4 @@ password `changeme`, **TLS off**.
 [Glowing Bear]: https://github.com/glowing-bear/glowing-bear
 [pbtrung/glowing-bear]: https://github.com/pbtrung/glowing-bear
 [WeeChat privacy gist]: https://gist.github.com/atoponce/f19666d6b206a10b411b97381a1861a1
+[Twingate connector]: https://www.twingate.com/docs/connectors

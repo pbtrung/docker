@@ -57,9 +57,6 @@ if [ ! -f "$WEECHAT_HOME/weechat.conf" ]; then
   add_cmd '/set relay.look.auto_open_buffer off'
   # Privacy hardening, from
   # https://gist.github.com/atoponce/f19666d6b206a10b411b97381a1861a1
-  # DCC (also can't work behind the Northflank load balancer)
-  add_cmd '/set weechat.plugin.autoload "*,!xfer"'
-  add_cmd '/plugin unload xfer'
   # don't answer CTCP requests (they leak client version, time zone, ...)
   for ctcp in action clientinfo finger ping source time userinfo version; do
     add_cmd "/set irc.ctcp.$ctcp \"\""
@@ -73,6 +70,14 @@ if [ ! -f "$WEECHAT_HOME/weechat.conf" ]; then
   add_cmd '/set fifo.file.path "${raw:${weechat_runtime_dir}/weechat_fifo}"'
 fi
 
+# Apply to existing volumes too. Plugins autoload before --run-command, so
+# unload the excluded interpreters on this start as well. Lua stays
+# installed and can be loaded explicitly with /plugin load lua.
+add_cmd '/set weechat.history.max_buffer_lines_number 500'
+add_cmd '/set weechat.plugin.autoload "*,!python,!perl,!ruby,!lua,!tcl,!guile,!javascript,!php,!xfer"'
+for plugin in python perl ruby lua tcl guile javascript php xfer; do
+  add_cmd "/mute /plugin unload $plugin"
+done
 # Relay settings, enforced on every start: "api" protocol (the one the
 # pbtrung/glowing-bear fork speaks) on loopback only (nginx proxies /api to
 # it), password from the environment. No TOTP: browsers can't send it on the
@@ -92,28 +97,42 @@ add_cmd '/set relay.port.api 9001'
 [ -n "$WEECHAT_EXTRA_COMMANDS" ] && add_cmd "$WEECHAT_EXTRA_COMMANDS"
 add_cmd '/save'
 
-# Cloudflare Tunnel (remotely managed): routes such as http://localhost:8080
-# are configured in the Cloudflare dashboard. cloudflared only makes outbound
-# connections, so no inbound port is needed. Its logs go straight to the
-# container console. If it exits, stop the container: PID 1 becomes WeeChat
-# after the final exec, so wait for that (a fast failure would otherwise
-# signal the shell, which PID 1 ignores), then SIGTERM it so WeeChat saves its
-# config and quits cleanly.
-if [ -n "$CLOUDFLARED_TOKEN" ]; then
-  printf "Starting cloudflared tunnel\n"
+# Twingate makes outbound connections only; keep port 8080 private on
+# Northflank. Unlike Fly, the container can't add a fixed loopback IP, so
+# map the Resource hostname to its current IPv4 address on every start.
+if [ -n "$TWINGATE_NETWORK" ] && [ -n "$TWINGATE_ACCESS_TOKEN" ] && [ -n "$TWINGATE_REFRESH_TOKEN" ]; then
+  TWINGATE_RESOURCE_HOST="${TWINGATE_RESOURCE_HOST:-weechat.internal}"
+  pod_ip="$(ip -4 route get 1.1.1.1 2>/dev/null |
+    sed -n 's/.* src \([0-9.]*\).*/\1/p')"
+  if [ -n "$pod_ip" ] &&
+    { awk -v host="$TWINGATE_RESOURCE_HOST" '
+        { for (i = 2; i <= NF && $i !~ /^#/; i++) if ($i == host) next; print }
+      ' /etc/hosts
+      printf "%s\t%s\n" "$pod_ip" "$TWINGATE_RESOURCE_HOST"; } >/tmp/twingate-hosts &&
+    cat /tmp/twingate-hosts >/etc/hosts; then
+    printf "Twingate Resource %s is %s\n" "$TWINGATE_RESOURCE_HOST" "$pod_ip"
+  else
+    printf "Can't map %s in /etc/hosts\n" "$TWINGATE_RESOURCE_HOST" >&2
+    exit 1
+  fi
+  rm -f /tmp/twingate-hosts
+
+  mkdir -p /run/twingate
+  chown twingate:twingate /run/twingate
+  chmod 700 /run/twingate
+  printf "Starting the Twingate connector for network %s\n" "$TWINGATE_NETWORK"
   (
-    status=0
-    su-exec weechat cloudflared tunnel --no-autoupdate --loglevel info \
-      run --token "$CLOUDFLARED_TOKEN" || status=$?
-    printf "cloudflared exited with status %s, stopping container\n" "$status"
-    until case "$(cat /proc/1/comm)" in weechat*) true ;; *) false ;; esac; do
-      sleep 1
+    while :; do
+      su-exec twingate /opt/twingate/connectord || true
+      printf "Twingate connector exited, restarting in 5 s\n"
+      sleep 5
     done
-    kill -TERM 1
   ) &
 else
-  printf "CLOUDFLARED_TOKEN not set, skipping cloudflared\n"
+  printf "TWINGATE_NETWORK, TWINGATE_ACCESS_TOKEN or TWINGATE_REFRESH_TOKEN not set, Twingate connector disabled\n"
 fi
+# Only the connector needs the tokens.
+unset TWINGATE_ACCESS_TOKEN TWINGATE_REFRESH_TOKEN
 
 NGINX_CONF="${NGINX_CONF:-/script/nginx.conf}"
 printf "Starting nginx with config: %s\n" "$NGINX_CONF"
