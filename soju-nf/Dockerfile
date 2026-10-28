@@ -40,8 +40,8 @@ RUN case "${TARGETARCH}" in \
     tar -xzf "$name.tar.gz" && \
     cp "$name/soju" "$name/sojuctl" "$name/LICENSE" /out/soju/ && \
     version="${tag#v}" && \
-    if ! printf '%s\n%s\n' 0.99.20 "$version" | sort -V -c; then \
-      echo 'Turso requires soju-rs v0.99.20 or later' >&2; exit 1; \
+    if ! printf '%s\n%s\n' 0.99.21 "$version" | sort -V -c; then \
+      echo 'Turso requires soju-rs v0.99.21 or later' >&2; exit 1; \
     fi && \
     printf "%s\n" "$tag" >/out/soju/.version && \
     { /out/soju/soju -help 2>&1 || true; } | grep -q "^Usage of soju"
