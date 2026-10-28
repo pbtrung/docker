@@ -95,7 +95,10 @@ It also unloads these plugins for the current session, since WeeChat loads
 plugins before processing startup commands. Only `weechat-lua` is installed;
 load it explicitly with `/plugin load lua` when needed.
 
-It also enforces the relay settings:
+It explicitly loads the relay plugin before enforcing the relay settings.
+This also handles volumes from the older terminal-only setup, which disabled
+relay autoload; changing the autoload setting alone takes effect on the next
+start.
 
 | Setting | Value |
 | ------- | ----- |
@@ -345,6 +348,30 @@ weechat-cmd 'irc.libera.#weechat' 'hello from the shell'
 The output goes to WeeChat's buffers (visible in Glowing Bear), not the
 shell. Config files are in `/data/weechat/*.conf`. Edit them only while
 WeeChat is stopped, or run `weechat-cmd '/reload'` afterwards.
+
+### Relay connection refused / HTTP 502
+
+If nginx reports `connect() failed (111: Connection refused)` for
+`127.0.0.1:9001`, the relay listener is unavailable. A volume from the older
+terminal-only setup may still have relay autoload disabled. This image loads
+the plugin explicitly on startup; rebuild and redeploy to apply the fix.
+
+To recover a running container immediately, use its shell:
+
+```sh
+weechat-cmd '/plugin load relay'
+weechat-cmd '/set relay.network.bind_address "127.0.0.1"'
+weechat-cmd '/set relay.network.ipv6 off'
+weechat-cmd '/set relay.network.password "${raw:${env:WEECHAT_RELAY_PASSWORD}}"'
+weechat-cmd '/set relay.network.totp_secret ""'
+weechat-cmd '/set relay.network.password_hash_iterations 1000'
+weechat-cmd '/mute /relay del weechat'
+weechat-cmd '/set relay.port.api 9001'
+weechat-cmd '/save'
+```
+
+Then reconnect Glowing Bear. `/set relay.port.api 9001` creates or updates
+the API relay when the relay plugin is loaded.
 
 ## Updating Glowing Bear
 

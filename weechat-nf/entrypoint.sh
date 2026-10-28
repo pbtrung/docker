@@ -85,6 +85,9 @@ done
 # pbtrung/glowing-bear fork speaks) on loopback only (nginx proxies /api to
 # it), password from the environment. No TOTP: browsers can't send it on the
 # WebSocket connection, so a TOTP secret would lock Glowing Bear out.
+# Older terminal-only configurations excluded relay from plugin.autoload.
+# Changing autoload above only affects the next start; load it now as well.
+add_cmd '/mute /plugin load relay'
 add_cmd '/set relay.network.bind_address "127.0.0.1"'
 add_cmd '/set relay.network.ipv6 off'
 # shellcheck disable=SC2016 # ${...} is WeeChat syntax, not shell
