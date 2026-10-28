@@ -4,7 +4,7 @@
 #        weechat-cmd 'irc.libera.#weechat' 'hello'   (text to a buffer)
 set -e
 
-FIFO="${WEECHAT_HOME:-/data/weechat}/weechat_fifo"
+FIFO="${WEECHAT_HOME:-${DATA_DIR:-/data}/weechat}/weechat_fifo"
 
 if [ ! -p "$FIFO" ]; then
   printf "FIFO %s not found, is WeeChat running?\n" "$FIFO" >&2

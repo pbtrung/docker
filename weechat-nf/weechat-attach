@@ -1,0 +1,8 @@
+#!/bin/sh
+# Attach to the existing session; never create another WeeChat instance.
+set -eu
+
+if [ "$(id -u)" -eq 0 ]; then
+  exec su-exec weechat "$0" "$@"
+fi
+exec tmux -S /run/weechat/tmux.sock attach-session -t weechat "$@"

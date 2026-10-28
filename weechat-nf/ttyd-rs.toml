@@ -1,0 +1,12 @@
+bind = "127.0.0.1:7681"
+command = ["/usr/local/bin/weechat-attach"]
+trust_proxy = true
+
+# Each browser gets a tmux client attached to the same persistent session.
+[session]
+mode = "isolated"
+timeout = 0
+reconnect_window = 5
+
+[file_transfer]
+enabled = false

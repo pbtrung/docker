@@ -1,0 +1,12 @@
+diff --git a/src/pty/process.rs b/src/pty/process.rs
+--- a/src/pty/process.rs
++++ b/src/pty/process.rs
+@@ -296,5 +296,7 @@
+         // Fast path: close_range(2) — atomic, no race with other threads
+         // close_range(first, ~0u, 0) — close all fds >= first
+-        if unsafe { libc::close_range(first, libc::c_uint::MAX, 0) } == 0 {
++        // musl targets do not expose libc::close_range; use the Linux syscall.
++        if unsafe { libc::syscall(libc::SYS_close_range, first, libc::c_uint::MAX, 0u32) }
++            == 0 {
+             return;
+         }

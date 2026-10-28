@@ -4,16 +4,23 @@ FROM alpine:edge AS builder
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
-ARG GLOWING_BEAR_REF=latest
+ARG TTYD_RS_REF=a10f6739e8b94e21ecc775bfa8dd4bb62e1f90ff
 
 RUN apk update && \
     apk --no-cache upgrade
 
-# Glowing Bear: prebuilt release from pbtrung/glowing-bear, seeded into
-# /data/glowing-bear on first start
-COPY update-glowing-bear.sh /usr/local/bin/
-RUN GLOWING_BEAR_DIR=/out/glowing-bear \
-      update-glowing-bear.sh "${GLOWING_BEAR_REF}"
+# The browser assets are checked into ttyd-rs and embedded by cargo.
+RUN apk --no-cache add build-base cargo git rust
+WORKDIR /src/ttyd-rs
+COPY ttyd-rs-musl.patch /tmp/ttyd-rs-musl.patch
+RUN git init . && \
+    git remote add origin https://github.com/pbtrung/ttyd-rs.git && \
+    git fetch --depth 1 origin "${TTYD_RS_REF}" && \
+    git checkout --detach FETCH_HEAD && \
+    git apply /tmp/ttyd-rs-musl.patch && \
+    cargo build --release --locked && \
+    mkdir -p /out/ttyd-rs && \
+    cp target/release/ttyd-rs LICENSE /out/ttyd-rs/
 
 # The connector needs glibc. Keep its libraries separate from Alpine's
 # musl libraries, using the same interpreter/RPATH setup as soju-fly.
@@ -36,15 +43,17 @@ FROM alpine:edge
 
 RUN apk update && \
     apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata mailcap nginx su-exec \
-      weechat weechat-lua mimalloc3 rclone
+    apk --no-cache add ca-certificates tzdata nginx su-exec tini libgcc \
+      weechat weechat-lua mimalloc3 rclone tmux zsh grml-zsh-config \
+      ncurses-terminfo
 
 RUN addgroup -g 1000 weechat && \
-    adduser -u 1000 -G weechat -D weechat && \
+    adduser -u 1000 -G weechat -D -H -h /data/home -s /bin/zsh weechat && \
     addgroup -S twingate && \
     adduser -S -G twingate -H -h /run/twingate twingate
 
-COPY --from=builder /out/glowing-bear /usr/share/glowing-bear-dist
+COPY --from=builder /out/ttyd-rs/ttyd-rs /usr/local/bin/ttyd-rs
+COPY --from=builder /out/ttyd-rs/LICENSE /usr/share/licenses/ttyd-rs/LICENSE
 COPY --from=builder /out/twingate /opt/twingate
 RUN ln -s /opt/twingate/connectorctl /usr/local/bin/connectorctl && \
     printf "hosts: files dns\n" >/etc/nsswitch.conf
@@ -53,14 +62,16 @@ ENV TWINGATE_API_ENDPOINT=/run/twingate/connector.sock \
 
 WORKDIR /script
 COPY entrypoint.sh /script/
+COPY start-weechat.sh /script/
 COPY nginx.conf /script/nginx.conf
+COPY ttyd-rs.toml /script/ttyd-rs.toml
+COPY tmux.conf /etc/tmux.conf
 COPY weechat-cmd /usr/local/bin/weechat-cmd
-COPY update-glowing-bear.sh /usr/local/bin/update-glowing-bear.sh
+COPY weechat-attach /usr/local/bin/weechat-attach
 COPY backup-weechat.sh /usr/local/bin/backup-weechat.sh
 
-# 8080: nginx (Glowing Bear + relay WebSocket), private on Northflank,
+# 8080: nginx -> ttyd-rs (127.0.0.1:7681), private on Northflank,
 # reached through the Twingate connector.
-# The WeeChat relay itself listens on 127.0.0.1:9001 only.
 EXPOSE 8080
 
-ENTRYPOINT ["/script/entrypoint.sh"]
+ENTRYPOINT ["/sbin/tini", "--", "/script/entrypoint.sh"]
