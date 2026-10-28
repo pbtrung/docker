@@ -74,4 +74,5 @@ COPY backup-weechat.sh /usr/local/bin/backup-weechat.sh
 # reached through the Twingate connector.
 EXPOSE 8080
 
-ENTRYPOINT ["/sbin/tini", "--", "/script/entrypoint.sh"]
+# Northflank may wrap the entrypoint, so Tini must also reap when not PID 1.
+ENTRYPOINT ["/sbin/tini", "-s", "--", "/script/entrypoint.sh"]

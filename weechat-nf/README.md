@@ -85,10 +85,11 @@ remain compatible with the musl patch and runtime configuration.
    **`/healthz`**. nginx forwards this to ttyd-rs; an unavailable ttyd-rs
    produces a failed check. WeeChat exits also stop the container.
 
-The entrypoint runs under tini and supervises WeeChat, ttyd-rs, nginx and
-cron. If one exits, the container stops so Northflank can restart it. On
-SIGTERM, the entrypoint signals WeeChat to save its configuration, closes
-tmux and stops the other services.
+The entrypoint runs under tini with `-s` so it also reaps orphaned children
+when Northflank starts it behind another process. It supervises WeeChat,
+ttyd-rs, nginx and cron. If one exits, the container stops so Northflank can
+restart it. On SIGTERM, the entrypoint signals WeeChat to save its
+configuration, closes tmux and stops the other services.
 
 ### Twingate
 
