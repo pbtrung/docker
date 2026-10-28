@@ -26,7 +26,7 @@ Northflank health check ──▶ nginx :8080
 
 ## Turso storage
 
-Accounts and messages live in Turso Cloud, using soju-rs v0.99.19 or
+Accounts and messages live in Turso Cloud, using soju-rs v0.99.20 or
 later. On startup, soju creates the controller database in the configured
 group if needed. The controller holds login accounts and links to each
 user's separate database, which stores their networks and messages. User
@@ -69,6 +69,28 @@ custom template must keep `message-store turso`, the admin listener at
 `/run/soju/admin`, and omit `db` and all `turso-*` directives: the latter
 come from the environment. The template must be a separate file from the
 generated `/etc/soju/config`.
+
+### Background writes and startup recovery
+
+This image requires soju-rs v0.99.20 or later. Its `chathistory-limit 200`
+also sets a per-user message batch target of 200 logical IRC messages.
+Partial batches flush after one second. One buffer fills while the other
+commits in the background; pending history and search stay available.
+Requests split below a 512 KiB encoded-body budget, and further on hosted
+size or execution-time limits. Full buffers apply input backpressure.
+
+Messages are forwarded before persistence is confirmed. Pending lines are
+held in memory and can be lost on a crash or forced shutdown; graceful
+shutdown drains them. See the [soju-rs Turso guide][turso guide] for retry
+and durability details.
+
+v0.99.20 tracks cloud schema versions in a table instead of writing the
+read-only `user_version` pragma. An empty controller left by a failed
+v0.99.19 initialization can be initialized on the next start; keep the same
+`TURSO_GROUP` and `TURSO_CONTROLLER` values and rebuild/redeploy. There is
+no need to delete that empty database. Startup logs now include the
+underlying database error if initialization still fails. Cloud databases
+first initialized by v0.99.20 require v0.99.20 or later to reopen.
 
 ### Existing SQLite deployments and backups
 
@@ -120,7 +142,7 @@ volume there still preserves your installed gamja version and updater:
 | `GAMJA_DATA_DIR`         | `/data/gamja`                               | Where gamja is installed; `update-gamja.sh` is copied to its parent directory |
 
 Build arguments: `SOJU_REF` (default `latest`) selects the
-[soju-rs release][soju-rs releases] to install (v0.99.19 or later; older releases are rejected at build time).
+[soju-rs release][soju-rs releases] to install (v0.99.20 or later; older releases are rejected at build time).
 `GAMJA_REF` (default `latest`) selects the gamja release tag bundled in the
 image. It's only installed on a volume that doesn't have gamja yet.
 
@@ -345,3 +367,5 @@ connector stays off.
 [soju-rs]: https://github.com/pbtrung/soju-rs
 [soju-rs releases]: https://github.com/pbtrung/soju-rs/releases
 [config file]: https://codeberg.org/emersion/gamja/src/branch/master/doc/config-file.md
+
+[turso guide]: https://github.com/pbtrung/soju-rs/blob/main/doc/turso.md
