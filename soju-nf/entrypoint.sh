@@ -1,25 +1,27 @@
 #!/bin/sh
 set -e
 
-# Persistent volume, mounted at /data: the SQLite DB in /data/soju and
-# gamja in /data/gamja.
-SOJU_DATA_DIR="${SOJU_DATA_DIR:-/data/soju}"
+# Turso holds all account and message data; /data only holds gamja.
 GAMJA_DATA_DIR="${GAMJA_DATA_DIR:-/data/gamja}"
 SOJU_CONF=/etc/soju/config
+export SOJU_CONF
 
-mkdir -p /etc/soju /run/soju "$SOJU_DATA_DIR"
-
-# -R: the DB (and its -wal/-shm files) may have been copied in as root, or
-# written by another user. Only soju needs to read it (it holds password
-# hashes and network secrets), and soju needs to write the directory too,
-# for the -wal and -shm files.
-chown -R soju:soju "$SOJU_DATA_DIR"
-chmod -R u+rwX,go-rwx "$SOJU_DATA_DIR"
+# Validate and render before starting services, without logging secrets.
+/usr/local/bin/configure-soju.sh
+unset TURSO_GROUP_TOKEN TURSO_API_TOKEN
+mkdir -p /run/soju
 chown soju:soju /run/soju
+chmod 700 /run/soju
+rm -f /run/soju/admin
 
-if [ -f "$SOJU_DATA_DIR/main.db" ]; then
-  printf "Using the existing soju database %s\n" "$SOJU_DATA_DIR/main.db"
-fi
+admin_password="${SOJU_ADMIN_PASSWORD:-}"
+admin_user="${SOJU_ADMIN_USER:-admin}"
+unset SOJU_ADMIN_PASSWORD
+cr="$(printf '\r')"
+case "$admin_user$admin_password" in
+  *"$cr"*|*'
+'*) printf 'Admin username and password must be single-line values\n' >&2; exit 1 ;;
+esac
 
 # gamja lives on the volume so it can be updated without a new image: run
 # update-gamja.sh (copied next to $GAMJA_DATA_DIR) from a shell. Seed it from
@@ -41,54 +43,6 @@ UPDATE_GAMJA="$(dirname "$GAMJA_DATA_DIR")/update-gamja.sh"
 cp /usr/local/bin/update-gamja.sh "$UPDATE_GAMJA"
 chmod +x "$UPDATE_GAMJA"
 
-# soju config: soju.conf is baked into the image as $SOJU_CONF. Use
-# SOJU_CONFIG_FILE instead if given (e.g. a Northflank secret file).
-if [ -n "$SOJU_CONFIG_FILE" ]; then
-  if [ ! -f "$SOJU_CONFIG_FILE" ]; then
-    printf "SOJU_CONFIG_FILE %s does not exist\n" "$SOJU_CONFIG_FILE"
-    exit 1
-  fi
-  cp "$SOJU_CONFIG_FILE" "$SOJU_CONF"
-fi
-chmod 644 "$SOJU_CONF"
-printf "soju config:\n"
-sed 's/^/  /' "$SOJU_CONF"
-
-# Bootstrap the first admin user on an empty database only: an existing
-# main.db keeps its users. soju-rs has no sojudb: once soju is up (exec'd
-# below), create the user with sojuctl over the admin socket from a
-# background job.
-if [ -n "$SOJU_ADMIN_USER" ] && [ -n "$SOJU_ADMIN_PASSWORD" ] && [ ! -f "$SOJU_DATA_DIR/main.db" ]; then
-  (
-    i=0
-    while [ ! -S /run/soju/admin ]; do
-      i=$((i + 1))
-      if [ "$i" -gt 30 ]; then
-        printf "soju didn't open /run/soju/admin, admin user not created\n"
-        exit 1
-      fi
-      sleep 1
-    done
-    printf "Creating admin user %s\n" "$SOJU_ADMIN_USER"
-    su-exec soju sojuctl -config "$SOJU_CONF" user create \
-      -username "$SOJU_ADMIN_USER" -password "$SOJU_ADMIN_PASSWORD" -admin
-  ) &
-fi
-
-# Daily DB backup with rclone (backup-soju.sh), run by BusyBox crond as
-# root. rclone.conf holds the storage credentials: root only. crond runs in
-# the foreground, as a background job, so it and its jobs keep the
-# container's stdout and stderr (-d 8: log the jobs it starts to stderr).
-RCLONE_CONFIG_FILE="${RCLONE_CONFIG_FILE:-/data/rclone.conf}"
-if [ -f "$RCLONE_CONFIG_FILE" ]; then
-  chown root:root "$RCLONE_CONFIG_FILE"
-  chmod 600 "$RCLONE_CONFIG_FILE"
-fi
-SOJU_BACKUP_CRON="${SOJU_BACKUP_CRON:-0 3 * * *}"
-printf "%s /usr/local/bin/backup-soju.sh\n" "$SOJU_BACKUP_CRON" >/etc/crontabs/root
-printf "Scheduling the soju DB backup: %s\n" "$SOJU_BACKUP_CRON"
-crond -f -d 8 &
-
 # gamja config, served at /config.json.
 # Default: always ask for a password, PING every 30s so idle WebSockets
 # aren't dropped by NAT or proxies along the way.
@@ -99,7 +53,7 @@ printf "%s\n" "${GAMJA_CONFIG_JSON:-{\"server\":{\"auth\":\"mandatory\",\"ping\"
 # restarts it whenever it exits. Its state (API socket, crash reports)
 # lives in /run/twingate (TWINGATE_API_ENDPOINT and
 # TWINGATE_CRASH_REPORTING_DIR, set in the Dockerfile).
-if [ -n "$TWINGATE_NETWORK" ] && [ -n "$TWINGATE_ACCESS_TOKEN" ] && [ -n "$TWINGATE_REFRESH_TOKEN" ]; then
+if [ -n "${TWINGATE_NETWORK:-}" ] && [ -n "${TWINGATE_ACCESS_TOKEN:-}" ] && [ -n "${TWINGATE_REFRESH_TOKEN:-}" ]; then
   # The Twingate Resource is a name, TWINGATE_RESOURCE_HOST, that resolves
   # to this container's own IPv4 address here. The address changes with
   # every restart and the container can't add a fixed one (no NET_ADMIN on
@@ -137,12 +91,60 @@ fi
 # environment
 unset TWINGATE_ACCESS_TOKEN TWINGATE_REFRESH_TOKEN
 
+# Supervise soju so bootstrap errors fail the container instead of leaving
+# a running service with no admin. Forward shutdown to soju for a clean exit.
+soju_pid=
+cleanup() {
+  if [ -n "$soju_pid" ]; then
+    kill -TERM "$soju_pid" 2>/dev/null || true
+    wait "$soju_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+printf "Starting %s\n" "$(soju -version)"
+su-exec soju soju -config "$SOJU_CONF" &
+soju_pid=$!
+
+i=0
+while [ ! -S /run/soju/admin ]; do
+  if ! kill -0 "$soju_pid" 2>/dev/null; then
+    printf 'soju exited before opening the admin socket\n' >&2
+    exit 1
+  fi
+  i=$((i + 1))
+  if [ "$i" -gt 300 ]; then
+    printf 'soju did not open /run/soju/admin within 300 seconds\n' >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+# Query the cloud-backed account list on every bootstrap; no local marker.
+# Only an explicit unknown username permits creation. Other errors are fatal.
+if [ -n "$admin_password" ]; then
+  if status="$(su-exec soju sojuctl user status "$admin_user" 2>&1)"; then
+    case "$status" in
+      "$admin_user (admin"*) printf 'Bootstrap admin already exists; keeping the stored password\n' ;;
+      *) printf 'SOJU_ADMIN_USER exists without admin privileges; refusing to overwrite it\n' >&2; exit 1 ;;
+    esac
+  else
+    case "$status" in
+      'unknown username '*)
+        printf 'Creating the bootstrap admin and their Turso database\n'
+        su-exec soju sojuctl user create \
+          -username "$admin_user" -password "$admin_password" -admin
+        ;;
+      *) printf 'Cannot check bootstrap admin: %s\n' "$status" >&2; exit 1 ;;
+    esac
+  fi
+fi
+unset admin_password
+
 NGINX_CONF="${NGINX_CONF:-/script/nginx.conf}"
 printf "Starting nginx with config: %s\n" "$NGINX_CONF"
 nginx -c "$NGINX_CONF"
 
-# soju is the main process: if it exits, the container stops and Northflank
-# restarts it. soju-rs releases before v0.99.7 have no -version: don't let
-# set -e stop the container for it.
-printf "Starting %s\n" "$(soju -version 2>/dev/null || echo "soju-rs (unknown version)")"
-exec su-exec soju soju -config "$SOJU_CONF"
+# If soju exits, the container exits and Northflank can restart it.
+wait "$soju_pid"

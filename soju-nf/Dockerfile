@@ -39,6 +39,10 @@ RUN case "${TARGETARCH}" in \
     grep " $name.tar.gz\$" SHA256SUMS | sha256sum -c - && \
     tar -xzf "$name.tar.gz" && \
     cp "$name/soju" "$name/sojuctl" "$name/LICENSE" /out/soju/ && \
+    version="${tag#v}" && \
+    if ! printf '%s\n%s\n' 0.99.19 "$version" | sort -V -c; then \
+      echo 'Turso requires soju-rs v0.99.19 or later' >&2; exit 1; \
+    fi && \
     printf "%s\n" "$tag" >/out/soju/.version && \
     { /out/soju/soju -help 2>&1 || true; } | grep -q "^Usage of soju"
 
@@ -70,19 +74,16 @@ RUN apk --no-cache add patchelf && \
 
 FROM alpine:edge
 
-# soju keeps uid/gid 1000, as with the Alpine soju package this image used
-# before: an existing /data/soju stays owned by the same user
+# Keep the existing soju uid/gid for the private config and admin socket
 RUN addgroup -g 1000 soju && \
     adduser -u 1000 -G soju -D soju && \
     addgroup -S twingate && \
     adduser -S -G twingate -H -h /run/twingate twingate
 
-# rclone: copy DB backups off the container (backup-soju.sh, daily by crond).
-# sqlite: inspect databases and take consistent backups from a shell.
+# Turso stores accounts and history remotely; no local SQLite backup jobs.
 RUN apk update && \
     apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata mailcap nginx su-exec \
-      rclone sqlite
+    apk --no-cache add ca-certificates tzdata mailcap nginx su-exec
 
 COPY --from=builder /out/gamja /usr/share/gamja-dist
 # soju-rs binaries have no built-in config path: the soju and sojuctl
@@ -91,7 +92,8 @@ COPY --from=builder /out/gamja /usr/share/gamja-dist
 COPY --from=builder /out/soju /usr/local/lib/soju
 COPY soju-wrapper.sh /usr/local/bin/soju
 COPY soju-wrapper.sh /usr/local/bin/sojuctl
-COPY soju.conf /etc/soju/config
+COPY soju.conf /usr/share/soju/config
+COPY configure-soju.sh /usr/local/bin/configure-soju.sh
 COPY --from=builder /out/twingate /opt/twingate
 RUN ln -s /opt/twingate/connectorctl /usr/local/bin/connectorctl
 # Where the connector keeps its API socket and crash reports; connectorctl
@@ -107,7 +109,6 @@ WORKDIR /script
 COPY entrypoint.sh /script/
 COPY nginx.conf /script/nginx.conf
 COPY update-gamja.sh /usr/local/bin/update-gamja.sh
-COPY backup-soju.sh /usr/local/bin/backup-soju.sh
 
 # 8080: nginx (gamja + WebSocket), 6667: soju plain IRC. Keep both private
 # on Northflank: they're reached through the Twingate connector.
