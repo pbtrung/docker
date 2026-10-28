@@ -6,35 +6,45 @@ set -e
 DATA_DIR="${DATA_DIR:-/data}"
 export WEECHAT_HOME="${WEECHAT_HOME:-$DATA_DIR/weechat}"
 
-: "${TTYD_PASSWORD:?TTYD_PASSWORD is required (browser terminal password)}"
+# The relay refuses every client without a password, so don't start without
+# one.
+if [ -z "$WEECHAT_RELAY_PASSWORD" ]; then
+  printf "WEECHAT_RELAY_PASSWORD is not set\n"
+  exit 1
+fi
 : "${WEECHAT_BACKUP_REMOTE:?WEECHAT_BACKUP_REMOTE is required (rclone upload destination)}"
 
-SHELL_HOME="$DATA_DIR/home"
-mkdir -p "$WEECHAT_HOME" "$SHELL_HOME" /run/weechat
-chown weechat:weechat "$DATA_DIR" "$WEECHAT_HOME" "$SHELL_HOME" /run/weechat
-chmod 700 /run/weechat
-# grml-zsh-config is loaded system-wide by Alpine's /etc/zsh/zshrc.
-# Keep custom startup files, completion cache and history on the volume.
-export ZDOTDIR="$SHELL_HOME"
-if [ ! -f "$SHELL_HOME/.zshrc" ]; then
-  cp /etc/skel/.zshrc "$SHELL_HOME/.zshrc"
-  chown weechat:weechat "$SHELL_HOME/.zshrc"
+mkdir -p "$WEECHAT_HOME"
+chown weechat:weechat "$DATA_DIR" "$WEECHAT_HOME"
+
+# Glowing Bear lives on the volume so it can be updated without a new image:
+# run $DATA_DIR/update-glowing-bear.sh from a shell. Seed it from the release
+# baked into the image on the first start; nginx serves it through the
+# /usr/share/glowing-bear symlink.
+GLOWING_BEAR_DIR="$DATA_DIR/glowing-bear"
+if [ ! -f "$GLOWING_BEAR_DIR/index.html" ]; then
+  printf "Installing bundled Glowing Bear %s in %s\n" \
+    "$(cat /usr/share/glowing-bear-dist/.version)" "$GLOWING_BEAR_DIR"
+  rm -rf "$GLOWING_BEAR_DIR"
+  cp -a /usr/share/glowing-bear-dist "$GLOWING_BEAR_DIR"
 fi
+ln -sfn "$GLOWING_BEAR_DIR" /usr/share/glowing-bear
+cp /usr/local/bin/update-glowing-bear.sh "$DATA_DIR/update-glowing-bear.sh"
+chmod +x "$DATA_DIR/update-glowing-bear.sh"
 cp /usr/local/bin/backup-weechat.sh "$DATA_DIR/backup-weechat.sh"
 chmod +x "$DATA_DIR/backup-weechat.sh"
 
-# Hash the browser password before starting any long-lived processes.
-TTYD_PASSWORD_HASH="$(printf '%s\n' "$TTYD_PASSWORD" | ttyd-rs --hash-password)"
-unset TTYD_PASSWORD
-
-# WeeChat commands run after startup (-r).
+# WeeChat commands run after startup (-r). They are evaluated, so the
+# ${raw:...} wrappers store the ${env:...} references in relay.conf instead of
+# the secrets themselves: WeeChat reads them from the environment whenever a
+# relay client authenticates.
 CMDS=""
 add_cmd() {
   CMDS="${CMDS:+$CMDS;}$1"
 }
 
 # Sensible defaults, only on the very first start (no weechat.conf yet), so
-# that later changes made in WeeChat are kept.
+# that later changes made from Glowing Bear are kept.
 if [ ! -f "$WEECHAT_HOME/weechat.conf" ]; then
   printf "First start, applying default WeeChat settings\n"
   # logs: rotate at 10 MB, compress rotated files with zstd
@@ -46,6 +56,8 @@ if [ ! -f "$WEECHAT_HOME/weechat.conf" ]; then
   add_cmd '/filter add irc_smart * irc_smart_filter *'
   # remember joined/parted channels in the server autojoin list
   add_cmd '/set irc.server_default.autojoin_dynamic on'
+  # don't pop up the relay list buffer whenever a client connects
+  add_cmd '/set relay.look.auto_open_buffer off'
   # Privacy hardening, from
   # https://gist.github.com/atoponce/f19666d6b206a10b411b97381a1861a1
   # don't answer CTCP requests (they leak client version, time zone, ...)
@@ -61,47 +73,32 @@ if [ ! -f "$WEECHAT_HOME/weechat.conf" ]; then
   add_cmd '/set fifo.file.path "${raw:${weechat_runtime_dir}/weechat_fifo}"'
 fi
 
-# Apply to existing volumes too. start-weechat.sh also excludes these
-# plugins on the command line, before any saved configuration is loaded.
-# Lua stays installed and can be loaded explicitly with /plugin load lua.
+# Apply to existing volumes too. Plugins autoload before --run-command, so
+# unload the excluded interpreters on this start as well. Lua stays
+# installed and can be loaded explicitly with /plugin load lua.
 add_cmd '/set weechat.history.max_buffer_lines_number 500'
-add_cmd '/set weechat.plugin.autoload "*,!relay,!python,!perl,!ruby,!lua,!tcl,!guile,!javascript,!php,!xfer"'
+add_cmd '/set weechat.plugin.autoload "*,!python,!perl,!ruby,!lua,!tcl,!guile,!javascript,!php,!xfer"'
+for plugin in python perl ruby lua tcl guile javascript php xfer; do
+  add_cmd "/mute /plugin unload $plugin"
+done
+# Relay settings, enforced on every start: "api" protocol (the one the
+# pbtrung/glowing-bear fork speaks) on loopback only (nginx proxies /api to
+# it), password from the environment. No TOTP: browsers can't send it on the
+# WebSocket connection, so a TOTP secret would lock Glowing Bear out.
+add_cmd '/set relay.network.bind_address "127.0.0.1"'
+add_cmd '/set relay.network.ipv6 off'
+# shellcheck disable=SC2016 # ${...} is WeeChat syntax, not shell
+add_cmd '/set relay.network.password "${raw:${env:WEECHAT_RELAY_PASSWORD}}"'
+add_cmd '/set relay.network.totp_secret ""'
+# PBKDF2 rounds for hashed passwords: 1000 instead of the default 100000, so
+# logging in is fast on phones
+add_cmd '/set relay.network.password_hash_iterations 1000'
+# free port 9001 from the "weechat" protocol relay of older versions of this
+# image
+add_cmd '/mute /relay del weechat'
+add_cmd '/set relay.port.api 9001'
 [ -n "$WEECHAT_EXTRA_COMMANDS" ] && add_cmd "$WEECHAT_EXTRA_COMMANDS"
 add_cmd '/save'
-export WEECHAT_STARTUP_COMMANDS="$CMDS"
-
-weechat_tmux() {
-  su-exec weechat env HOME="$SHELL_HOME" SHELL=/bin/zsh \
-    tmux -S /run/weechat/tmux.sock "$@"
-}
-
-weechat_pid=
-ttyd_pid=
-nginx_pid=
-cron_pid=
-twingate_pid=
-# shellcheck disable=SC2329 # Invoked by the EXIT trap.
-cleanup() {
-  trap - EXIT INT TERM
-  printf "Stopping WeeChat and terminal services\n"
-  # The tmux server is detached, so container signals must reach WeeChat
-  # explicitly. Give it time to save before closing the remaining windows.
-  if [ -n "$weechat_pid" ]; then
-    kill -TERM "$weechat_pid" 2>/dev/null || true
-    remaining=15
-    while kill -0 "$weechat_pid" 2>/dev/null && [ "$remaining" -gt 0 ]; do
-      sleep 1
-      remaining=$((remaining - 1))
-    done
-  fi
-  weechat_tmux kill-server 2>/dev/null || true
-  for child in "$ttyd_pid" "$nginx_pid" "$cron_pid" "$twingate_pid"; do
-    [ -z "$child" ] || kill -TERM "$child" 2>/dev/null || true
-  done
-  wait || true
-}
-trap cleanup EXIT
-trap 'exit 0' INT TERM
 
 # Twingate makes outbound connections only; keep port 8080 private on
 # Northflank. Unlike Fly, the container can't add a fixed loopback IP, so
@@ -128,19 +125,12 @@ if [ -n "$TWINGATE_NETWORK" ] && [ -n "$TWINGATE_ACCESS_TOKEN" ] && [ -n "$TWING
   chmod 700 /run/twingate
   printf "Starting the Twingate connector for network %s\n" "$TWINGATE_NETWORK"
   (
-    connector_pid=
-    trap '[ -z "$connector_pid" ] || kill "$connector_pid" 2>/dev/null; wait; exit 0' INT TERM
     while :; do
-      su-exec twingate /opt/twingate/connectord &
-      connector_pid=$!
-      wait "$connector_pid" || true
+      su-exec twingate /opt/twingate/connectord || true
       printf "Twingate connector exited, restarting in 5 s\n"
-      sleep 5 &
-      connector_pid=$!
-      wait "$connector_pid" || true
+      sleep 5
     done
   ) &
-  twingate_pid=$!
 else
   printf "TWINGATE_NETWORK, TWINGATE_ACCESS_TOKEN or TWINGATE_REFRESH_TOKEN not set, Twingate connector disabled\n"
 fi
@@ -152,34 +142,15 @@ unset TWINGATE_ACCESS_TOKEN TWINGATE_REFRESH_TOKEN
 printf '0 3 * * * "%s/backup-weechat.sh"\n' "$DATA_DIR" >/etc/crontabs/root
 printf "Scheduling the WeeChat backup daily at 03:00\n"
 busybox crond -f -d 8 &
-cron_pid=$!
-
-# Start WeeChat before any browser connects. Closing/reloading a browser
-# only detaches its tmux client; WeeChat and IRC connections stay alive.
-printf "Starting curses WeeChat in tmux, home: %s\n" "$WEECHAT_HOME"
-weechat_pid="$(weechat_tmux new-session -d -s weechat -n weechat \
-  -c "$SHELL_HOME" -x 120 -y 36 -P -F '#{pane_pid}' /script/start-weechat.sh)"
-weechat_tmux new-window -d -t weechat: -n shell -c "$SHELL_HOME"
-
-printf "Starting ttyd-rs on 127.0.0.1:7681\n"
-su-exec weechat env HOME="$SHELL_HOME" SHELL=/bin/zsh \
-  ttyd-rs --config /script/ttyd-rs.toml --working-dir "$SHELL_HOME" \
-    --auth --username "${TTYD_USERNAME:-weechat}" --password "$TTYD_PASSWORD_HASH" &
-ttyd_pid=$!
-unset TTYD_PASSWORD_HASH
 
 NGINX_CONF="${NGINX_CONF:-/script/nginx.conf}"
 printf "Starting nginx with config: %s\n" "$NGINX_CONF"
-nginx -c "$NGINX_CONF" -g 'daemon off;' &
-nginx_pid=$!
+nginx -c "$NGINX_CONF"
 
-# Stop the container if a core service exits, so Northflank can restart it.
-while kill -0 "$weechat_pid" 2>/dev/null &&
-      kill -0 "$ttyd_pid" 2>/dev/null &&
-      kill -0 "$nginx_pid" 2>/dev/null &&
-      kill -0 "$cron_pid" 2>/dev/null; do
-  sleep 1 &
-  wait $! || true
-done
-printf "A WeeChat or terminal service exited\n" >&2
-exit 1
+# Headless WeeChat in the foreground as PID 1, logging to the container
+# console (--stdout). "--daemon" would fork into the background, and the
+# container would exit right away.
+printf "Starting WeeChat in %s\n" "$WEECHAT_HOME"
+exec su-exec weechat env LD_PRELOAD=/usr/lib/libmimalloc.so.3 \
+  weechat-headless --stdout --dir "$WEECHAT_HOME" \
+  --run-command "$CMDS"
