@@ -3,6 +3,11 @@ set -e
 
 # Turso holds all account and message data; /data only holds gamja.
 GAMJA_DATA_DIR="${GAMJA_DATA_DIR:-/data/gamja}"
+# Large, resumable search-index migrations may exceed five minutes.
+startup_timeout="${SOJU_STARTUP_TIMEOUT:-1800}"
+case "$startup_timeout" in
+  ''|*[!0-9]*|???????*) printf 'SOJU_STARTUP_TIMEOUT must be 0..999999 seconds (0 means unlimited)\n' >&2; exit 1 ;;
+esac
 SOJU_CONF=/etc/soju/config
 export SOJU_CONF
 
@@ -114,8 +119,8 @@ while [ ! -S /run/soju/admin ]; do
     exit 1
   fi
   i=$((i + 1))
-  if [ "$i" -gt 300 ]; then
-    printf 'soju did not open /run/soju/admin within 300 seconds\n' >&2
+  if [ "$startup_timeout" -ne 0 ] && [ "$i" -gt "$startup_timeout" ]; then
+    printf 'soju did not open /run/soju/admin within %s seconds\n' "$startup_timeout" >&2
     exit 1
   fi
   sleep 1

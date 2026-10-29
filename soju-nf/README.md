@@ -26,7 +26,7 @@ Northflank health check ──▶ nginx :8080
 
 ## Turso storage
 
-Accounts and messages live in Turso Cloud, using soju-rs v0.99.21 or
+Accounts and messages live in Turso Cloud, using soju-rs v0.99.22 or
 later. On startup, soju creates the controller database in the configured
 group if needed. The controller holds login accounts and links to each
 user's separate database, which stores their networks and messages. User
@@ -72,7 +72,7 @@ generated `/etc/soju/config`.
 
 ### Background writes and startup recovery
 
-This image requires soju-rs v0.99.21 or later. Its `chathistory-limit 200`
+This image requires soju-rs v0.99.22 or later. Its `chathistory-limit 200`
 also sets a per-user message batch target of 200 logical IRC messages.
 Partial batches flush after one second. One buffer fills while the other
 commits in the background; pending history and search stay available.
@@ -98,6 +98,26 @@ successful COMMIT; this is now handled in the same HTTP pipeline. If
 v0.99.20 left the tables in place but failed startup, keep the controller
 and rebuild/redeploy. No database deletion or schema reset is needed.
 
+### v0.99.22 schema and cost upgrade
+
+Default builds keep `SOJU_REF=latest` and `GAMJA_REF=latest`, with `TWINGATE_REF=latest` for the connector.
+Both release-metadata files are refreshed during builds, so rebuilding selects the latest published
+stable release without editing a version tag. Older soju archives are rejected
+at build time; v0.99.22 is the minimum for these schema changes.
+
+v0.99.22 removes User from tenant databases and references TursoOwner instead;
+login accounts stay in the controller. It uses multi-row message inserts,
+disjoint history indexes, sparse FTS, and receipt deltas to reduce row usage.
+See the [soju query-cost evidence][query evidence] for measured results.
+
+Back up the controller and all tenants before upgrading. The controller becomes
+schema 2 and tenants become schema 32; older binaries cannot reopen them.
+The search-index migration commits a resumable cursor every small chunk and
+retains existing messages and IDs. Allow a long Northflank startup probe for
+large histories. The entrypoint waits up to `SOJU_STARTUP_TIMEOUT` seconds
+(default 1800, or 0 for unlimited), while still detecting an exited soju process.
+An interruption resumes on the next start. Do not delete databases to retry.
+
 ### Existing SQLite deployments and backups
 
 Switching this image to Turso does **not** import `/data/soju/main.db`.
@@ -120,7 +140,7 @@ volume there still preserves your installed gamja version and updater:
 
 | File            | Purpose |
 | --------------- | ------- |
-| `Dockerfile`    | `builder` stage (alpine:edge) downloads a soju-rs release (checked against its `SHA256SUMS`) and a gamja release, and copies the Twingate connector (with its glibc libraries) from `twingate/connector:1`; runtime stage on alpine:edge installs nginx and su-exec with `apk` |
+| `Dockerfile`    | `builder` stage (alpine:edge) downloads a soju-rs release (checked against its `SHA256SUMS`) and a gamja release, and copies the Twingate connector (with its glibc libraries) from `twingate/connector:latest`; runtime stage on alpine:edge installs nginx and su-exec with `apk` |
 | `soju.conf`     | Base config installed at `/usr/share/soju/config`: Turso storage, message expiry, `chathistory-limit`, listeners, hostname |
 | `configure-soju.sh` | Validates environment variables and renders the private `/etc/soju/config` with escaped Turso values |
 | `soju-wrapper.sh` | Installed as `soju` and `sojuctl`: runs the soju-rs binary with `-config /etc/soju/config` |
@@ -143,12 +163,14 @@ volume there still preserves your installed gamja version and updater:
 | `TURSO_API_TOKEN`        | Required                                    | Platform API token for database provisioning (`turso-api-token`). **Secret** |
 | `SOJU_ADMIN_USER`        | `admin`                                     | Bootstrap admin username, checked when `SOJU_ADMIN_PASSWORD` is set |
 | `SOJU_ADMIN_PASSWORD`    | —                                           | Initial password for a missing bootstrap admin. **Secret**; existing passwords are kept |
+| `SOJU_STARTUP_TIMEOUT` | `1800` | Seconds to wait for initial migrations/admin socket; `0` disables the deadline |
 | `SOJU_CONFIG_FILE`       | —                                           | Path to a base config template; storage stays Turso and credentials come from `TURSO_*` |
 | `GAMJA_CONFIG_JSON`      | `{"server":{"auth":"mandatory","ping":30}}` | gamja [config file] contents, served at `/config.json` |
 | `GAMJA_DATA_DIR`         | `/data/gamja`                               | Where gamja is installed; `update-gamja.sh` is copied to its parent directory |
 
 Build arguments: `SOJU_REF` (default `latest`) selects the
-[soju-rs release][soju-rs releases] to install (v0.99.21 or later; older releases are rejected at build time).
+[soju-rs release][soju-rs releases] to install (v0.99.22 or later; older releases are rejected at build time).
+`TWINGATE_REF` (default `latest`) selects the connector image tag.
 `GAMJA_REF` (default `latest`) selects the gamja release tag bundled in the
 image. It's only installed on a volume that doesn't have gamja yet.
 
@@ -337,7 +359,7 @@ afterwards. No restart is needed.
 ## Run locally
 
 ```sh
-docker build -t soju-nf soju-nf/
+docker build --pull -t soju-nf soju-nf/
 docker run --rm -p 8080:8080 -p 6667:6667 -v soju-nf-data:/data \
   -e TURSO_ORGANIZATION -e TURSO_GROUP -e TURSO_CONTROLLER \
   -e TURSO_GROUP_TOKEN -e TURSO_API_TOKEN \
@@ -375,3 +397,5 @@ connector stays off.
 [config file]: https://codeberg.org/emersion/gamja/src/branch/master/doc/config-file.md
 
 [turso guide]: https://github.com/pbtrung/soju-rs/blob/main/doc/turso.md
+
+[query evidence]: https://github.com/pbtrung/soju-rs/blob/main/doc/turso-query-evidence.md

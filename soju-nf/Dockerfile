@@ -1,4 +1,5 @@
-FROM twingate/connector:1 AS twingate
+ARG TWINGATE_REF=latest
+FROM twingate/connector:${TWINGATE_REF} AS twingate
 
 FROM alpine:edge AS builder
 
@@ -40,16 +41,19 @@ RUN case "${TARGETARCH}" in \
     tar -xzf "$name.tar.gz" && \
     cp "$name/soju" "$name/sojuctl" "$name/LICENSE" /out/soju/ && \
     version="${tag#v}" && \
-    if ! printf '%s\n%s\n' 0.99.21 "$version" | sort -V -c; then \
-      echo 'Turso requires soju-rs v0.99.21 or later' >&2; exit 1; \
+    if ! printf '%s\n%s\n' 0.99.22 "$version" | sort -V -c; then \
+      echo 'Turso requires soju-rs v0.99.22 or later' >&2; exit 1; \
     fi && \
     printf "%s\n" "$tag" >/out/soju/.version && \
     { /out/soju/soju -help 2>&1 || true; } | grep -q "^Usage of soju"
 
 # gamja: prebuilt release from pbtrung/gamja, seeded into /data/gamja on
 # first start
+ADD https://api.github.com/repos/pbtrung/gamja/releases/latest /tmp/gamja-latest.json
 COPY update-gamja.sh /usr/local/bin/
-RUN GAMJA_DATA_DIR=/out/gamja update-gamja.sh "${GAMJA_REF}"
+RUN tag="${GAMJA_REF}" && \
+    if [ "$tag" = latest ]; then tag="$(jq -er .tag_name /tmp/gamja-latest.json)"; fi && \
+    GAMJA_DATA_DIR=/out/gamja update-gamja.sh "$tag"
 
 # Twingate connector: the official image's binaries are linked against glibc,
 # which Alpine doesn't have. Copy them with the glibc libraries they need
