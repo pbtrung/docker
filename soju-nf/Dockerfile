@@ -6,30 +6,27 @@ FROM alpine:edge AS soju-builder
 # Fail a RUN when any command of a pipe fails, not just the last one
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
-ARG SOJU_REF=c-port
 ARG TARGETARCH=amd64
 
 RUN test "${TARGETARCH}" = amd64 || \
     { echo 'soju c-port currently supports amd64 only' >&2; exit 1; }
 RUN apk --no-cache upgrade && \
-    apk --no-cache add bash cmake coreutils curl-dev diffutils gcc jq \
+    apk --no-cache add bash ca-certificates cmake coreutils curl-dev diffutils gcc git jq \
       linux-headers llhttp-dev make musl-dev openssl-dev patch perl \
       pkgconf python3 samurai tar xz
 
-# soju: the C port, built from the c-port branch of pbtrung/soju-rs. The
-# branch tip is fetched with ADD, which downloads it on every build: a new
-# commit invalidates the cached build below. SOJU_REF can pin a commit (or
-# another branch or tag) for reproducible builds.
-ADD https://api.github.com/repos/pbtrung/soju-rs/commits/c-port /tmp/soju-c-port.json
+# soju: always build the latest commit on pbtrung/soju-rs's c-port branch.
+# ADD checks the branch tip on every build; a new commit invalidates the
+# cached Git checkout and build below.
+ADD https://api.github.com/repos/pbtrung/soju-rs/commits/c-port /tmp/soju-commit.json
 WORKDIR /tmp/soju
-RUN if [ "${SOJU_REF}" = c-port ]; then \
-      revision="$(jq -er .sha /tmp/soju-c-port.json)"; \
-    else \
-      revision="$(wget -q -O - "https://api.github.com/repos/pbtrung/soju-rs/commits/${SOJU_REF}" | jq -er .sha)"; \
-    fi && \
+RUN revision="$(jq -er .sha /tmp/soju-commit.json)" && \
     printf '%s\n' "$revision" | grep -Eq '^[0-9a-f]{40}$' && \
-    wget -q -O source.tar.gz "https://codeload.github.com/pbtrung/soju-rs/tar.gz/${revision}" && \
-    tar -xzf source.tar.gz --strip-components=1 && \
+    git init . && \
+    git remote add origin https://github.com/pbtrung/soju-rs.git && \
+    git fetch --depth=1 origin "$revision" && \
+    git checkout --detach FETCH_HEAD && \
+    test "$(git rev-parse HEAD)" = "$revision" && \
     cmake --preset gcc-release && \
     cmake --build --preset gcc-release --target soju sojuctl --parallel 4 && \
     mkdir -p /out/soju && \

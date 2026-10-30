@@ -3,7 +3,7 @@
 A single container image for [Northflank] that runs:
 
 - the soju C port — a C port of the [soju] IRC bouncer, behaviorally
-  matched to [soju-rs] (the Rust port): built from source from the
+  matched to [soju-rs] (the Rust port): built from a Git checkout of the
   `c-port` branch of [pbtrung/soju-rs][soju-rs] (amd64 only)
 - [gamja] — IRC web client, prebuilt release from the [pbtrung/gamja] fork,
   kept on the volume so it can be updated from a shell
@@ -133,12 +133,13 @@ again.
 | `GAMJA_CONFIG_JSON`      | `{"server":{"auth":"mandatory","ping":30}}` | gamja [config file] contents, served at `/config.json` |
 | `GAMJA_DATA_DIR`         | `/data/gamja`                               | Where gamja is installed; `update-gamja.sh` is copied to its parent directory |
 
-Build arguments: `SOJU_REF` (default `c-port`) selects the soju source: the
-tip of the `c-port` branch of pbtrung/soju-rs, or a pinned commit, branch or
-tag. Only `amd64` images are supported. The image records the built commit
-in `/usr/local/lib/soju/.revision` and the version in `.version`.
-`TWINGATE_REF` (default
-`latest`) selects the connector image tag. `GAMJA_REF` (default `latest`)
+Every build resolves the latest commit on the `c-port` branch of
+pbtrung/soju-rs, fetches that exact commit with Git, and compiles a shallow
+checkout. Only `amd64` images are supported. The image records the built
+commit in `/usr/local/lib/soju/.revision` and the version in `.version`.
+
+Build arguments: `TWINGATE_REF` (default `latest`) selects the connector
+image tag. `GAMJA_REF` (default `latest`)
 selects the gamja release tag bundled in the image. It's only installed on
 a volume that doesn't have gamja yet. The branch tip and release metadata
 are fetched on every build, so a rebuild picks up new commits and releases.
@@ -199,8 +200,8 @@ from Git and deploys in one service).
 - **Build type:** `Dockerfile`
   - **Dockerfile location:** `/soju-nf/Dockerfile`
   - **Build context:** `/soju-nf`
-  - (optional) **Build arguments:** `SOJU_REF` to pin a soju commit, or
-    `GAMJA_REF` a gamja release tag, instead of the latest
+  - (optional) **Build arguments:** `GAMJA_REF` to pin a gamja release tag;
+    soju always builds from the latest `c-port` commit
 - **Resources:** the smallest compute plan is enough. **Instances: 1**: a
   second instance would run a second connector with the same tokens.
 
