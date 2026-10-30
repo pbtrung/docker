@@ -2,9 +2,9 @@
 
 A single container image for [Northflank] that runs:
 
-- [soju-rs] — Rust port of the [soju] IRC bouncer: the static musl build
-  of a [pbtrung/soju-rs release][soju-rs releases], checked against its
-  `SHA256SUMS`
+- the soju C port — a C port of the [soju] IRC bouncer, behaviorally
+  matched to [soju-rs] (the Rust port): built from source from the
+  `c-port` branch of [pbtrung/soju-rs][soju-rs] (amd64 only)
 - [gamja] — IRC web client, prebuilt release from the [pbtrung/gamja] fork,
   kept on the volume so it can be updated from a shell
 - nginx — serves gamja and proxies the IRC WebSocket (`/socket`) to soju,
@@ -13,7 +13,7 @@ A single container image for [Northflank] that runs:
   outbound connections to Twingate, so no port is public
 - a daily backup of the soju database to an rclone remote (BusyBox `crond`)
 
-File uploads (IRCv3 filehost) are disabled: soju-rs doesn't support them
+File uploads (IRCv3 filehost) are disabled: soju doesn't support them
 and nginx doesn't proxy `/uploads`.
 
 ```
@@ -45,22 +45,23 @@ On every start, the entrypoint makes `/data/soju` readable only by `soju`
 upstream Go soju, on startup.
 
 `soju.conf` sets `message-expiry 5d`: messages older than five days are
-deleted at startup and daily. soju-rs vacuums the database on startup,
+deleted at startup and daily. soju vacuums the database on startup,
 before clients can connect, and when a configuration reload changes
 `message-expiry`. Set `message-expiry 0d` in a custom config
 (`SOJU_CONFIG_FILE`) to keep messages forever.
 
-### Upgrading to soju-rs v0.99.24
+### Upgrading to schema 35
 
-v0.99.24 moves the database to schema 35: the message table is clustered by
-conversation and time, which cuts the disk reads (and the memory spike)
-when a client loads history, and conversations record their latest
-mention for gamja's unread and mention badges. Older soju versions can't
-open the upgraded database: take a backup first (`backup-soju.sh`, below).
-The one-time copy of the message table needs free space on the volume up
-to about twice its size. The entrypoint waits up to `SOJU_STARTUP_TIMEOUT`
-seconds (default 1800, or 0 for unlimited) for soju to finish migrating,
-while still detecting an exited soju process.
+The C port uses the database of soju-rs v0.99.24, schema 35, and migrates
+older databases (soju-rs or upstream Go soju) on startup. In schema 35 the
+message table is clustered by conversation and time, which cuts the disk
+reads (and the memory spike) when a client loads history, and conversations
+record their latest mention for gamja's unread and mention badges. Older
+soju versions can't open the upgraded database: take a backup first
+(`backup-soju.sh`, below). The one-time copy of the message table needs
+free space on the volume up to about twice its size. The entrypoint waits
+up to `SOJU_STARTUP_TIMEOUT` seconds (default 1800, or 0 for unlimited) for
+soju to finish migrating, while still detecting an exited soju process.
 
 ### Bootstrap admin
 
@@ -105,9 +106,9 @@ again.
 
 | File            | Purpose |
 | --------------- | ------- |
-| `Dockerfile`    | `builder` downloads and checks a soju-rs release and a gamja release, and copies the Twingate connector (with its glibc libraries) from `twingate/connector`; runtime stage on alpine:edge installs nginx, su-exec, rclone and sqlite with `apk` |
+| `Dockerfile`    | `soju-builder` compiles the soju C port from the `c-port` branch; `builder` downloads a gamja release and copies the Twingate connector (with its glibc libraries) from `twingate/connector`; runtime stage on alpine:edge installs nginx, su-exec, rclone, sqlite and soju's shared libraries with `apk` |
 | `soju.conf`     | Base config installed at `/usr/share/soju/config`: SQLite storage, message expiry, `chathistory-limit`, listeners, hostname |
-| `soju-wrapper.sh` | Installed as `soju` and `sojuctl`: runs the soju-rs binary with `-config /etc/soju/config` |
+| `soju-wrapper.sh` | Installed as `soju` and `sojuctl`: runs the soju binary with `-config /etc/soju/config` |
 | `entrypoint.sh` | Installs the config and gamja, schedules the backup, starts the connector and soju, bootstraps the admin, then starts nginx; forwards shutdown to soju |
 | `backup-soju.sh` | Snapshots `main.db` and copies it with rclone (daily via crond, or by hand) |
 | `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` (`/data/gamja`) |
@@ -132,12 +133,15 @@ again.
 | `GAMJA_CONFIG_JSON`      | `{"server":{"auth":"mandatory","ping":30}}` | gamja [config file] contents, served at `/config.json` |
 | `GAMJA_DATA_DIR`         | `/data/gamja`                               | Where gamja is installed; `update-gamja.sh` is copied to its parent directory |
 
-Build arguments: `SOJU_REF` (default `latest`) selects the soju-rs release
-tag; `amd64` and `arm64` images are supported. `TWINGATE_REF` (default
+Build arguments: `SOJU_REF` (default `c-port`) selects the soju source: the
+tip of the `c-port` branch of pbtrung/soju-rs, or a pinned commit, branch or
+tag. Only `amd64` images are supported. The image records the built commit
+in `/usr/local/lib/soju/.revision` and the version in `.version`.
+`TWINGATE_REF` (default
 `latest`) selects the connector image tag. `GAMJA_REF` (default `latest`)
 selects the gamja release tag bundled in the image. It's only installed on
-a volume that doesn't have gamja yet. Release metadata is fetched on every
-build, so a rebuild picks up new releases.
+a volume that doesn't have gamja yet. The branch tip and release metadata
+are fetched on every build, so a rebuild picks up new commits and releases.
 
 ## Twingate
 
@@ -195,8 +199,8 @@ from Git and deploys in one service).
 - **Build type:** `Dockerfile`
   - **Dockerfile location:** `/soju-nf/Dockerfile`
   - **Build context:** `/soju-nf`
-  - (optional) **Build arguments:** `SOJU_REF` or `GAMJA_REF` to pin a
-    soju-rs or gamja release tag instead of the latest
+  - (optional) **Build arguments:** `SOJU_REF` to pin a soju commit, or
+    `GAMJA_REF` a gamja release tag, instead of the latest
 - **Resources:** the smallest compute plan is enough. **Instances: 1**: a
   second instance would run a second connector with the same tokens.
 
@@ -278,7 +282,7 @@ sojuctl user create -username bob -password <password>
 sojuctl user status
 ```
 
-`sojuctl` already knows where the config is (`/etc/soju/config`). soju-rs
+`sojuctl` already knows where the config is (`/etc/soju/config`). soju
 has no `sojudb`: the entrypoint creates the first admin with `sojuctl` over
 the admin socket once soju is up.
 
@@ -291,7 +295,8 @@ the database may need its `-wal` file to be consistent.
 ### Updating
 
 - Pushing to `main` triggers a rebuild and redeploy automatically, which
-  also picks up the latest soju-rs release and Twingate connector. The
+  also rebuilds soju from the tip of `c-port` and picks up the latest
+  Twingate connector. The
   database survives redeploys on the volume; soju migrates its schema on
   startup (back it up before a major upgrade).
 - gamja is updated from a shell instead (see
@@ -353,5 +358,4 @@ stays off; without `/data/rclone.conf`, backups are skipped.
 [Twingate connector]: https://www.twingate.com/docs/connectors
 [soju]: https://soju.im/
 [soju-rs]: https://github.com/pbtrung/soju-rs
-[soju-rs releases]: https://github.com/pbtrung/soju-rs/releases
 [config file]: https://codeberg.org/emersion/gamja/src/branch/master/doc/config-file.md
