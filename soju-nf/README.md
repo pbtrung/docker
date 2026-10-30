@@ -2,17 +2,18 @@
 
 A single container image for [Northflank] that runs:
 
-- [soju-c] — C port of the [soju] IRC bouncer, built from the `c-port`
-  branch of pbtrung/soju-rs on Alpine musl, with system OpenSSL, libcurl
-  and llhttp shared libraries
+- [soju-rs] — Rust port of the [soju] IRC bouncer: the static musl build
+  of a [pbtrung/soju-rs release][soju-rs releases], checked against its
+  `SHA256SUMS`
 - [gamja] — IRC web client, prebuilt release from the [pbtrung/gamja] fork,
   kept on the volume so it can be updated from a shell
 - nginx — serves gamja and proxies the IRC WebSocket (`/socket`) to soju,
   on plain HTTP port 8080
 - a [Twingate connector] — the only way in from outside: it only makes
   outbound connections to Twingate, so no port is public
+- a daily backup of the soju database to an rclone remote (BusyBox `crond`)
 
-File uploads (IRCv3 filehost) are disabled: soju-c doesn't support them
+File uploads (IRCv3 filehost) are disabled: soju-rs doesn't support them
 and nginx doesn't proxy `/uploads`.
 
 ```
@@ -24,133 +25,91 @@ IRC client ─Twingate─▶ connector ─▶ soju.internal:6667 soju plain IRC
 Northflank health check ──▶ nginx :8080
 ```
 
-## Turso storage
+## Storage
 
-Accounts and messages live in Turso Cloud, using the C port's Turso backend.
-On startup, soju creates the controller database in the configured group if needed. The controller holds login accounts and links to each
-user's separate database, which stores their networks and messages. User
-database names are random 128-bit values encoded as 25 lowercase letters
-and digits. The Turso organization and group must already exist.
-
-Set these runtime environment variables (mark both tokens as secrets):
-
-```text
-TURSO_ORGANIZATION=<organization slug>
-TURSO_GROUP=<database group>
-TURSO_CONTROLLER=soju-controller
-TURSO_GROUP_TOKEN=<read-write SQL token for the entire group>
-TURSO_API_TOKEN=<Turso Platform API token>
-SOJU_ADMIN_USER=admin
-SOJU_ADMIN_PASSWORD=<a strong initial password>
-```
-
-The entrypoint renders `message-store turso` and the five `turso-*`
-settings into `/etc/soju/config`. The config is owned by `soju`, mode 600,
-and its contents are never printed. `TURSO_CONTROLLER` defaults to
-`soju-controller`; the other four Turso variables are required. The group
-token authorizes SQL against all databases in the group. The separate API
-token needs permission to read, create, and delete databases; a group SQL
-token cannot provision them. Keep the group dedicated to this instance.
-
-When `SOJU_ADMIN_PASSWORD` is set, startup checks `SOJU_ADMIN_USER`
-(default `admin`) through the admin socket. A missing account is created
-as an admin, together with its user database. An existing admin keeps its
-stored password. An existing non-admin account or an account lookup or
-creation failure stops the container. No local marker controls bootstrap,
-so restarts and replacement volumes work. Remove `SOJU_ADMIN_PASSWORD`
-after setup; changing this variable does not reset an existing password.
-
-`soju.conf` sets `message-expiry 5d`: messages older than five days are
-deleted at startup and daily. Turso does not run `VACUUM`, checkpoints, or
-other local SQLite maintenance. Set `message-expiry 0d` in a custom base
-config selected with `SOJU_CONFIG_FILE` to retain messages forever. A
-custom template must keep `message-store turso`, the admin listener at
-`/run/soju/admin`, and omit `db` and all `turso-*` directives: the latter
-come from the environment. The template must be a separate file from the
-generated `/etc/soju/config`.
-
-### Background writes and startup recovery
-
-The C port includes the tenant batching from soju-rs v0.99.22. Its
-`chathistory-limit 200` also sets a per-user message batch target of 200 logical IRC messages.
-Partial batches flush after one second. One buffer fills while the other
-commits in the background; pending history and search stay available.
-Requests split below a 512 KiB encoded-body budget, and further on hosted
-size or execution-time limits. Full buffers apply input backpressure.
-
-Messages are forwarded before persistence is confirmed. Pending lines are
-held in memory and can be lost on a crash or forced shutdown; graceful
-shutdown drains them. See the [soju-rs Turso guide][turso guide] for retry
-and durability details.
-
-v0.99.20 tracks cloud schema versions in a table instead of writing the
-read-only `user_version` pragma. An empty controller left by a failed
-v0.99.19 initialization can be initialized on the next start; keep the same
-`TURSO_GROUP` and `TURSO_CONTROLLER` values and rebuild/redeploy. There is
-no need to delete that empty database. Startup logs now include the
-underlying database error if initialization still fails. Cloud databases
-first initialized by v0.99.20 require v0.99.20 or later to reopen.
-
-v0.99.21 also fixes `Turso closed the stream during a transaction` after
-controller schema creation. Hosted Turso may close the SQL stream after a
-successful COMMIT; this is now handled in the same HTTP pipeline. If
-v0.99.20 left the tables in place but failed startup, keep the controller
-and rebuild/redeploy. No database deletion or schema reset is needed.
-
-### v0.99.22 schema and cost upgrade
-
-Default builds use `SOJU_REF=c-port`, `GAMJA_REF=latest` and
-`TWINGATE_REF=latest`. The branch-tip metadata and gamja release metadata
-are refreshed during builds. Rebuilding therefore selects the current C
-source commit and latest stable gamja release. Pin `SOJU_REF` to a full
-commit SHA to keep a specific C build. The installed source SHA is saved
-in `/usr/local/lib/soju/.revision`; its version is in `.version`.
-
-The C port currently reports `v0.99.0`; that version belongs to the C port
-and is independent of the Rust version numbers below. It includes the
-schema changes described here. Phase 11 release qualification remains
-in progress; see the [C port checkpoint][C port checkpoint].
-
-v0.99.22 removes User from tenant databases and references TursoOwner instead;
-login accounts stay in the controller. It uses multi-row message inserts,
-disjoint history indexes, sparse FTS, and receipt deltas to reduce row usage.
-See the [soju query-cost evidence][query evidence] for measured results.
-
-Back up the controller and all tenants before upgrading. The controller becomes
-schema 2 and tenants become schema 32; older binaries cannot reopen them.
-The search-index migration commits a resumable cursor every small chunk and
-retains existing messages and IDs. Allow a long Northflank startup probe for
-large histories. The entrypoint waits up to `SOJU_STARTUP_TIMEOUT` seconds
-(default 1800, or 0 for unlimited), while still detecting an exited soju process.
-An interruption resumes on the next start. Do not delete databases to retry.
-
-### Existing SQLite deployments and backups
-
-Switching this image to Turso does **not** import `/data/soju/main.db`.
-Existing local users, networks, and messages are not loaded into Turso.
-Keep the old database and its backups if you need that data; this image
-leaves those files untouched. The old SQLite/rclone backup job is removed
-because local snapshots would not back up the cloud databases. Manage
-backups for the controller and every user database through Turso.
-
-`/data` is now optional for account and message persistence. A Northflank
-volume there still preserves your installed gamja version and updater:
+Accounts, networks and messages live in a local SQLite database,
+`/data/soju/main.db` (`db sqlite3` and `message-store db`), on a persistent
+volume mounted at `/data`:
 
 ```text
 /data/
+├── soju/main.db     soju database, with its -wal and -shm files (SOJU_DATA_DIR)
+├── rclone.conf      rclone remotes for the backup (RCLONE_CONFIG_FILE), optional
 ├── gamja/           gamja web client (GAMJA_DATA_DIR)
 └── update-gamja.sh  gamja updater, copied on every start
 ```
+
+On every start, the entrypoint makes `/data/soju` readable only by `soju`
+(the database holds password hashes and network secrets). An existing
+`main.db` is reused: soju migrates older schemas, including databases of
+upstream Go soju, on startup.
+
+`soju.conf` sets `message-expiry 5d`: messages older than five days are
+deleted at startup and daily. soju-rs vacuums the database on startup,
+before clients can connect, and when a configuration reload changes
+`message-expiry`. Set `message-expiry 0d` in a custom config
+(`SOJU_CONFIG_FILE`) to keep messages forever.
+
+### Upgrading to soju-rs v0.99.24
+
+v0.99.24 moves the database to schema 35: the message table is clustered by
+conversation and time, which cuts the disk reads (and the memory spike)
+when a client loads history, and conversations record their latest
+mention for gamja's unread and mention badges. Older soju versions can't
+open the upgraded database: take a backup first (`backup-soju.sh`, below).
+The one-time copy of the message table needs free space on the volume up
+to about twice its size. The entrypoint waits up to `SOJU_STARTUP_TIMEOUT`
+seconds (default 1800, or 0 for unlimited) for soju to finish migrating,
+while still detecting an exited soju process.
+
+### Bootstrap admin
+
+When `SOJU_ADMIN_PASSWORD` is set, startup checks `SOJU_ADMIN_USER`
+(default `admin`) through the admin socket. A missing account is created
+as an admin. An existing admin keeps its stored password. An existing
+non-admin account, or an account lookup or creation failure, stops the
+container. Remove `SOJU_ADMIN_PASSWORD` after setup: changing it doesn't
+reset an existing password.
+
+### Backups
+
+`backup-soju.sh` takes a consistent snapshot of `main.db` with
+`sqlite3 .backup` (soju keeps writing to it and its `-wal` file, so the
+file itself could be torn) and copies it to `SOJU_BACKUP_REMOTE` with
+rclone, still named `main.db`. BusyBox `crond` runs it daily, at 03:00 by
+default (`SOJU_BACKUP_CRON`); its output goes to the container log. Run it
+from a shell for an immediate backup:
+
+```sh
+backup-soju.sh
+```
+
+Put the rclone remotes in `/data/rclone.conf` (owned by root, mode 600 on
+every start): without it, the job logs that it skips the backup. For
+example, for an S3-compatible bucket:
+
+```ini
+[tigris]
+type = s3
+provider = Other
+access_key_id = <key>
+secret_access_key = <secret>
+endpoint = https://fly.storage.tigris.dev
+```
+
+To restore, stop the service, put the backup at `/data/soju/main.db`
+(removing any `main.db-wal` and `main.db-shm` next to it), and start it
+again.
 
 ## Files
 
 | File            | Purpose |
 | --------------- | ------- |
-| `Dockerfile`    | `soju-builder` compiles the C port from its resolved Git commit on alpine:edge; `builder` downloads a gamja release, and copies the Twingate connector (with its glibc libraries) from `twingate/connector:latest`; runtime stage on alpine:edge installs nginx, su-exec and the C binaries' shared-library dependencies with `apk` |
-| `soju.conf`     | Base config installed at `/usr/share/soju/config`: Turso storage, message expiry, `chathistory-limit`, listeners, hostname |
-| `configure-soju.sh` | Validates environment variables and renders the private `/etc/soju/config` with escaped Turso values |
-| `soju-wrapper.sh` | Installed as `soju` and `sojuctl`: runs the soju C binary with `-config /etc/soju/config` |
-| `entrypoint.sh` | Renders config, installs gamja, starts the connector and soju, bootstraps the admin, then starts nginx; forwards shutdown to soju |
+| `Dockerfile`    | `builder` downloads and checks a soju-rs release and a gamja release, and copies the Twingate connector (with its glibc libraries) from `twingate/connector`; runtime stage on alpine:edge installs nginx, su-exec, rclone and sqlite with `apk` |
+| `soju.conf`     | Base config installed at `/usr/share/soju/config`: SQLite storage, message expiry, `chathistory-limit`, listeners, hostname |
+| `soju-wrapper.sh` | Installed as `soju` and `sojuctl`: runs the soju-rs binary with `-config /etc/soju/config` |
+| `entrypoint.sh` | Installs the config and gamja, schedules the backup, starts the connector and soju, bootstraps the admin, then starts nginx; forwards shutdown to soju |
+| `backup-soju.sh` | Snapshots `main.db` and copies it with rclone (daily via crond, or by hand) |
 | `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` (`/data/gamja`) |
 | `nginx.conf`    | Serves gamja, `/config.json` and `/healthz`, proxies `/socket` to soju, per-IP limits |
 
@@ -162,25 +121,23 @@ volume there still preserves your installed gamja version and updater:
 | `TWINGATE_ACCESS_TOKEN`  | —                                           | Connector access token. **Secret** |
 | `TWINGATE_REFRESH_TOKEN` | —                                           | Connector refresh token. **Secret**. The connector only starts when all three are set; the tokens are removed from the environment before nginx and soju start |
 | `TWINGATE_RESOURCE_HOST` | `soju.internal`                             | Name of the Twingate Resource: mapped to the container's own IPv4 address in `/etc/hosts` on every start |
-| `TURSO_ORGANIZATION`     | Required                                    | Turso organization slug (`turso-organization`) |
-| `TURSO_GROUP`            | Required                                    | Existing database group (`turso-group`) |
-| `TURSO_CONTROLLER`       | `soju-controller`                           | Controller database name (`turso-controller`) |
-| `TURSO_GROUP_TOKEN`      | Required                                    | Read-write SQL token for every database in the group (`turso-group-token`). **Secret** |
-| `TURSO_API_TOKEN`        | Required                                    | Platform API token for database provisioning (`turso-api-token`). **Secret** |
 | `SOJU_ADMIN_USER`        | `admin`                                     | Bootstrap admin username, checked when `SOJU_ADMIN_PASSWORD` is set |
 | `SOJU_ADMIN_PASSWORD`    | —                                           | Initial password for a missing bootstrap admin. **Secret**; existing passwords are kept |
-| `SOJU_STARTUP_TIMEOUT` | `1800` | Seconds to wait for initial migrations/admin socket; `0` disables the deadline |
-| `SOJU_CONFIG_FILE`       | —                                           | Path to a base config template; storage stays Turso and credentials come from `TURSO_*` |
+| `SOJU_STARTUP_TIMEOUT`   | `1800`                                      | Seconds to wait for migrations and startup maintenance (admin socket); `0` disables the deadline |
+| `SOJU_CONFIG_FILE`       | —                                           | Path to a soju config to use instead of the bundled `soju.conf`; keep the admin listener at `/run/soju/admin` |
+| `SOJU_DATA_DIR`          | `/data/soju`                                | Directory of `main.db`; a custom config must point `db` there |
+| `SOJU_BACKUP_CRON`       | `0 3 * * *`                                 | crond schedule of `backup-soju.sh` (container time zone, UTC by default) |
+| `SOJU_BACKUP_REMOTE`     | `tigris:skypiea/soju/`                      | rclone destination of the backup |
+| `RCLONE_CONFIG_FILE`     | `/data/rclone.conf`                         | rclone config with the remote's credentials |
 | `GAMJA_CONFIG_JSON`      | `{"server":{"auth":"mandatory","ping":30}}` | gamja [config file] contents, served at `/config.json` |
 | `GAMJA_DATA_DIR`         | `/data/gamja`                               | Where gamja is installed; `update-gamja.sh` is copied to its parent directory |
 
-Build arguments: `SOJU_REF` (default `c-port`) selects the C source Git ref
-or commit to build. Only `amd64` is supported by the C port. The release
-build links system OpenSSL, libcurl and llhttp dynamically; these runtime
-libraries are installed with `apk`.
-`TWINGATE_REF` (default `latest`) selects the connector image tag.
-`GAMJA_REF` (default `latest`) selects the gamja release tag bundled in the
-image. It's only installed on a volume that doesn't have gamja yet.
+Build arguments: `SOJU_REF` (default `latest`) selects the soju-rs release
+tag; `amd64` and `arm64` images are supported. `TWINGATE_REF` (default
+`latest`) selects the connector image tag. `GAMJA_REF` (default `latest`)
+selects the gamja release tag bundled in the image. It's only installed on
+a volume that doesn't have gamja yet. Release metadata is fetched on every
+build, so a rebuild picks up new releases.
 
 ## Twingate
 
@@ -238,8 +195,8 @@ from Git and deploys in one service).
 - **Build type:** `Dockerfile`
   - **Dockerfile location:** `/soju-nf/Dockerfile`
   - **Build context:** `/soju-nf`
-  - (optional) **Build arguments:** `GAMJA_REF` to pin a gamja release
-    tag instead of the latest
+  - (optional) **Build arguments:** `SOJU_REF` or `GAMJA_REF` to pin a
+    soju-rs or gamja release tag instead of the latest
 - **Resources:** the smallest compute plan is enough. **Instances: 1**: a
   second instance would run a second connector with the same tokens.
 
@@ -261,17 +218,13 @@ TWINGATE_ACCESS_TOKEN=<access token>
 TWINGATE_REFRESH_TOKEN=<refresh token>
 ```
 
-Add the required Turso settings and initial admin credentials (store
-the tokens and password as secrets):
+Add the initial admin credentials (the password as a secret), and the
+backup destination if it differs from the default:
 
 ```
-TURSO_ORGANIZATION=<organization slug>
-TURSO_GROUP=<database group>
-TURSO_CONTROLLER=soju-controller
-TURSO_GROUP_TOKEN=<read-write group SQL token>
-TURSO_API_TOKEN=<Platform API token>
 SOJU_ADMIN_USER=admin
 SOJU_ADMIN_PASSWORD=<a strong initial password>
+SOJU_BACKUP_REMOTE=<remote>:<bucket>/soju/
 ```
 
 Click **Create service**. The startup log shows
@@ -279,17 +232,17 @@ Click **Create service**. The startup log shows
 connector's `State: Online`; the connector also shows as connected in the
 admin console.
 
-### 6. Add an optional persistent volume
+### 6. Add a persistent volume
 
-This is optional for Turso: users, networks, and messages survive redeploys
-in the cloud databases. Attach a volume to preserve gamja updates across
-redeploys. A fresh container without one reinstalls bundled gamja.
-
-Open the service → **Volumes → Add volume** (or attach the existing one):
+Required: the database lives on it. Open the service → **Volumes → Add
+volume** (or attach the existing one):
 
 - **Name:** `soju-data`
-- **Size:** 1 GB is plenty
+- **Size:** 1 GB is plenty with `message-expiry 5d`
 - **Mount path:** `/data`
+
+Then put the rclone config at `/data/rclone.conf` from a shell on the
+container (see [Backups](#backups)).
 
 ### 7. Health check (recommended)
 
@@ -325,21 +278,22 @@ sojuctl user create -username bob -password <password>
 sojuctl user status
 ```
 
-`sojuctl` already knows where the config is (`/etc/soju/config`). soju-c
+`sojuctl` already knows where the config is (`/etc/soju/config`). soju-rs
 has no `sojudb`: the entrypoint creates the first admin with `sojuctl` over
 the admin socket once soju is up.
 
-### Backups
+### Backing up
 
-Back up the controller and all user databases in Turso. Northflank
-volume backups only cover files such as gamja and any retained old SQLite
-database, not the cloud databases.
+See [Backups](#backups) above: daily `backup-soju.sh` with rclone. Northflank
+volume backups also cover `/data`, but a snapshot taken while soju writes
+the database may need its `-wal` file to be consistent.
 
 ### Updating
 
 - Pushing to `main` triggers a rebuild and redeploy automatically, which
-  also picks up the current `c-port` commit and latest Twingate connector.
-  Turso databases survive redeploys; soju migrates their schemas on startup.
+  also picks up the latest soju-rs release and Twingate connector. The
+  database survives redeploys on the volume; soju migrates its schema on
+  startup (back it up before a major upgrade).
 - gamja is updated from a shell instead (see
   [Updating gamja](#updating-gamja)). A new image doesn't replace the copy
   on the volume.
@@ -369,16 +323,14 @@ afterwards. No restart is needed.
 ```sh
 docker build --pull -t soju-nf soju-nf/
 docker run --rm -p 8080:8080 -p 6667:6667 -v soju-nf-data:/data \
-  -e TURSO_ORGANIZATION -e TURSO_GROUP -e TURSO_CONTROLLER \
-  -e TURSO_GROUP_TOKEN -e TURSO_API_TOKEN \
   -e SOJU_ADMIN_USER -e SOJU_ADMIN_PASSWORD \
   soju-nf
 ```
 
-Export the environment variables listed in [Turso storage](#turso-storage)
-before running the command; avoid putting real tokens or passwords in shell
-history. Then open http://localhost:8080. Without the `TWINGATE_*` variables, the
-connector stays off.
+Export `SOJU_ADMIN_USER` and `SOJU_ADMIN_PASSWORD` before running the
+command; avoid putting real passwords in shell history. Then open
+http://localhost:8080. Without the `TWINGATE_*` variables, the connector
+stays off; without `/data/rclone.conf`, backups are skipped.
 
 ## Notes
 
@@ -401,10 +353,5 @@ connector stays off.
 [Twingate connector]: https://www.twingate.com/docs/connectors
 [soju]: https://soju.im/
 [soju-rs]: https://github.com/pbtrung/soju-rs
-[soju-c]: https://github.com/pbtrung/soju-rs/tree/c-port
-[C port checkpoint]: https://github.com/pbtrung/soju-rs/blob/c-port/doc/phase11-wip.md
+[soju-rs releases]: https://github.com/pbtrung/soju-rs/releases
 [config file]: https://codeberg.org/emersion/gamja/src/branch/master/doc/config-file.md
-
-[turso guide]: https://github.com/pbtrung/soju-rs/blob/main/doc/turso.md
-
-[query evidence]: https://github.com/pbtrung/soju-rs/blob/main/doc/turso-query-evidence.md

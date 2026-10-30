@@ -1,9 +1,12 @@
 #!/bin/sh
 set -e
 
-# Turso holds all account and message data; /data only holds gamja.
+# Persistent volume, mounted at /data: the SQLite DB in /data/soju and
+# gamja in /data/gamja.
+SOJU_DATA_DIR="${SOJU_DATA_DIR:-/data/soju}"
 GAMJA_DATA_DIR="${GAMJA_DATA_DIR:-/data/gamja}"
-# Large, resumable search-index migrations may exceed five minutes.
+# soju opens the admin socket after startup maintenance: schema migrations
+# (e.g. rebuilding a large message table) and the vacuum of message expiry.
 startup_timeout="${SOJU_STARTUP_TIMEOUT:-1800}"
 case "$startup_timeout" in
   ''|*[!0-9]*|???????*) printf 'SOJU_STARTUP_TIMEOUT must be 0..999999 seconds (0 means unlimited)\n' >&2; exit 1 ;;
@@ -11,9 +14,30 @@ esac
 SOJU_CONF=/etc/soju/config
 export SOJU_CONF
 
-# Validate and render before starting services, without logging secrets.
-/usr/local/bin/configure-soju.sh
-unset TURSO_GROUP_TOKEN TURSO_API_TOKEN
+mkdir -p "$SOJU_DATA_DIR"
+# -R: the DB (and its -wal/-shm files) may have been copied in as root, or
+# written by another user. Only soju needs to read it (it holds password
+# hashes and network secrets), and soju needs to write the directory too,
+# for the -wal and -shm files.
+chown -R soju:soju "$SOJU_DATA_DIR"
+chmod -R u+rwX,go-rwx "$SOJU_DATA_DIR"
+if [ -f "$SOJU_DATA_DIR/main.db" ]; then
+  printf "Using the existing soju database %s\n" "$SOJU_DATA_DIR/main.db"
+fi
+
+# soju config: soju.conf is baked into the image. Use SOJU_CONFIG_FILE
+# instead if given (e.g. a Northflank secret file).
+template="${SOJU_CONFIG_FILE:-/usr/share/soju/config}"
+if [ ! -f "$template" ]; then
+  printf "SOJU_CONFIG_FILE %s does not exist\n" "$template" >&2
+  exit 1
+fi
+mkdir -p /etc/soju
+cp "$template" "$SOJU_CONF"
+chmod 644 "$SOJU_CONF"
+printf "soju config:\n"
+sed 's/^/  /' "$SOJU_CONF"
+
 mkdir -p /run/soju
 chown soju:soju /run/soju
 chmod 700 /run/soju
@@ -47,6 +71,24 @@ ln -sfn "$GAMJA_DATA_DIR" /usr/share/gamja
 UPDATE_GAMJA="$(dirname "$GAMJA_DATA_DIR")/update-gamja.sh"
 cp /usr/local/bin/update-gamja.sh "$UPDATE_GAMJA"
 chmod +x "$UPDATE_GAMJA"
+
+# Daily DB backup with rclone (backup-soju.sh), run by BusyBox crond as
+# root. rclone.conf holds the storage credentials: root only. crond runs in
+# the background, so it and its jobs keep the container's stdout and stderr
+# (-d 8: log the jobs it starts to stderr).
+RCLONE_CONFIG_FILE="${RCLONE_CONFIG_FILE:-/data/rclone.conf}"
+if [ -f "$RCLONE_CONFIG_FILE" ]; then
+  chown root:root "$RCLONE_CONFIG_FILE"
+  chmod 600 "$RCLONE_CONFIG_FILE"
+fi
+SOJU_BACKUP_CRON="${SOJU_BACKUP_CRON:-0 3 * * *}"
+case "$SOJU_BACKUP_CRON" in
+  *"$cr"*|*'
+'*) printf 'SOJU_BACKUP_CRON must be a single line\n' >&2; exit 1 ;;
+esac
+printf "%s /usr/local/bin/backup-soju.sh\n" "$SOJU_BACKUP_CRON" >/etc/crontabs/root
+printf "Scheduling the soju DB backup: %s\n" "$SOJU_BACKUP_CRON"
+crond -f -d 8 &
 
 # gamja config, served at /config.json.
 # Default: always ask for a password, PING every 30s so idle WebSockets
@@ -126,7 +168,7 @@ while [ ! -S /run/soju/admin ]; do
   sleep 1
 done
 
-# Query the cloud-backed account list on every bootstrap; no local marker.
+# Check the account on every start, rather than only on an empty database.
 # Only an explicit unknown username permits creation. Other errors are fatal.
 if [ -n "$admin_password" ]; then
   if status="$(su-exec soju sojuctl user status "$admin_user" 2>&1)"; then
@@ -137,7 +179,7 @@ if [ -n "$admin_password" ]; then
   else
     case "$status" in
       'unknown username '*)
-        printf 'Creating the bootstrap admin and their Turso database\n'
+        printf 'Creating the bootstrap admin %s\n' "$admin_user"
         su-exec soju sojuctl user create \
           -username "$admin_user" -password "$admin_password" -admin
         ;;
