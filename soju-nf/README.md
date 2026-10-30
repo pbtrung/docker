@@ -2,9 +2,9 @@
 
 A single container image for [Northflank] that runs:
 
-- [soju-rs] — Rust port of the [soju] IRC bouncer, static musl binaries
-  from the latest [pbtrung/soju-rs release][soju-rs releases], as in
-  [soju-fly](../soju-fly)
+- [soju-c] — C port of the [soju] IRC bouncer, built from the `c-port`
+  branch of pbtrung/soju-rs on Alpine musl, with system OpenSSL, libcurl
+  and llhttp shared libraries
 - [gamja] — IRC web client, prebuilt release from the [pbtrung/gamja] fork,
   kept on the volume so it can be updated from a shell
 - nginx — serves gamja and proxies the IRC WebSocket (`/socket`) to soju,
@@ -12,7 +12,7 @@ A single container image for [Northflank] that runs:
 - a [Twingate connector] — the only way in from outside: it only makes
   outbound connections to Twingate, so no port is public
 
-File uploads (IRCv3 filehost) are disabled: soju-rs doesn't support them
+File uploads (IRCv3 filehost) are disabled: soju-c doesn't support them
 and nginx doesn't proxy `/uploads`.
 
 ```
@@ -26,9 +26,8 @@ Northflank health check ──▶ nginx :8080
 
 ## Turso storage
 
-Accounts and messages live in Turso Cloud, using soju-rs v0.99.22 or
-later. On startup, soju creates the controller database in the configured
-group if needed. The controller holds login accounts and links to each
+Accounts and messages live in Turso Cloud, using the C port's Turso backend.
+On startup, soju creates the controller database in the configured group if needed. The controller holds login accounts and links to each
 user's separate database, which stores their networks and messages. User
 database names are random 128-bit values encoded as 25 lowercase letters
 and digits. The Turso organization and group must already exist.
@@ -72,8 +71,8 @@ generated `/etc/soju/config`.
 
 ### Background writes and startup recovery
 
-This image requires soju-rs v0.99.22 or later. Its `chathistory-limit 200`
-also sets a per-user message batch target of 200 logical IRC messages.
+The C port includes the tenant batching from soju-rs v0.99.22. Its
+`chathistory-limit 200` also sets a per-user message batch target of 200 logical IRC messages.
 Partial batches flush after one second. One buffer fills while the other
 commits in the background; pending history and search stay available.
 Requests split below a 512 KiB encoded-body budget, and further on hosted
@@ -100,10 +99,17 @@ and rebuild/redeploy. No database deletion or schema reset is needed.
 
 ### v0.99.22 schema and cost upgrade
 
-Default builds keep `SOJU_REF=latest` and `GAMJA_REF=latest`, with `TWINGATE_REF=latest` for the connector.
-Both release-metadata files are refreshed during builds, so rebuilding selects the latest published
-stable release without editing a version tag. Older soju archives are rejected
-at build time; v0.99.22 is the minimum for these schema changes.
+Default builds use `SOJU_REF=c-port`, `GAMJA_REF=latest` and
+`TWINGATE_REF=latest`. The branch-tip metadata and gamja release metadata
+are refreshed during builds. Rebuilding therefore selects the current C
+source commit and latest stable gamja release. Pin `SOJU_REF` to a full
+commit SHA to keep a specific C build. The installed source SHA is saved
+in `/usr/local/lib/soju/.revision`; its version is in `.version`.
+
+The C port currently reports `v0.99.0`; that version belongs to the C port
+and is independent of the Rust version numbers below. It includes the
+schema changes described here. Phase 11 release qualification remains
+in progress; see the [C port checkpoint][C port checkpoint].
 
 v0.99.22 removes User from tenant databases and references TursoOwner instead;
 login accounts stay in the controller. It uses multi-row message inserts,
@@ -140,10 +146,10 @@ volume there still preserves your installed gamja version and updater:
 
 | File            | Purpose |
 | --------------- | ------- |
-| `Dockerfile`    | `builder` stage (alpine:edge) downloads a soju-rs release (checked against its `SHA256SUMS`) and a gamja release, and copies the Twingate connector (with its glibc libraries) from `twingate/connector:latest`; runtime stage on alpine:edge installs nginx and su-exec with `apk` |
+| `Dockerfile`    | `soju-builder` compiles the C port from its resolved Git commit on alpine:edge; `builder` downloads a gamja release, and copies the Twingate connector (with its glibc libraries) from `twingate/connector:latest`; runtime stage on alpine:edge installs nginx, su-exec and the C binaries' shared-library dependencies with `apk` |
 | `soju.conf`     | Base config installed at `/usr/share/soju/config`: Turso storage, message expiry, `chathistory-limit`, listeners, hostname |
 | `configure-soju.sh` | Validates environment variables and renders the private `/etc/soju/config` with escaped Turso values |
-| `soju-wrapper.sh` | Installed as `soju` and `sojuctl`: runs the soju-rs binary with `-config /etc/soju/config` |
+| `soju-wrapper.sh` | Installed as `soju` and `sojuctl`: runs the soju C binary with `-config /etc/soju/config` |
 | `entrypoint.sh` | Renders config, installs gamja, starts the connector and soju, bootstraps the admin, then starts nginx; forwards shutdown to soju |
 | `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` (`/data/gamja`) |
 | `nginx.conf`    | Serves gamja, `/config.json` and `/healthz`, proxies `/socket` to soju, per-IP limits |
@@ -168,8 +174,10 @@ volume there still preserves your installed gamja version and updater:
 | `GAMJA_CONFIG_JSON`      | `{"server":{"auth":"mandatory","ping":30}}` | gamja [config file] contents, served at `/config.json` |
 | `GAMJA_DATA_DIR`         | `/data/gamja`                               | Where gamja is installed; `update-gamja.sh` is copied to its parent directory |
 
-Build arguments: `SOJU_REF` (default `latest`) selects the
-[soju-rs release][soju-rs releases] to install (v0.99.22 or later; older releases are rejected at build time).
+Build arguments: `SOJU_REF` (default `c-port`) selects the C source Git ref
+or commit to build. Only `amd64` is supported by the C port. The release
+build links system OpenSSL, libcurl and llhttp dynamically; these runtime
+libraries are installed with `apk`.
 `TWINGATE_REF` (default `latest`) selects the connector image tag.
 `GAMJA_REF` (default `latest`) selects the gamja release tag bundled in the
 image. It's only installed on a volume that doesn't have gamja yet.
@@ -317,7 +325,7 @@ sojuctl user create -username bob -password <password>
 sojuctl user status
 ```
 
-`sojuctl` already knows where the config is (`/etc/soju/config`). soju-rs
+`sojuctl` already knows where the config is (`/etc/soju/config`). soju-c
 has no `sojudb`: the entrypoint creates the first admin with `sojuctl` over
 the admin socket once soju is up.
 
@@ -330,7 +338,7 @@ database, not the cloud databases.
 ### Updating
 
 - Pushing to `main` triggers a rebuild and redeploy automatically, which
-  also picks up the latest soju-rs release and `1.x` Twingate connector.
+  also picks up the current `c-port` commit and latest Twingate connector.
   Turso databases survive redeploys; soju migrates their schemas on startup.
 - gamja is updated from a shell instead (see
   [Updating gamja](#updating-gamja)). A new image doesn't replace the copy
@@ -393,7 +401,8 @@ connector stays off.
 [Twingate connector]: https://www.twingate.com/docs/connectors
 [soju]: https://soju.im/
 [soju-rs]: https://github.com/pbtrung/soju-rs
-[soju-rs releases]: https://github.com/pbtrung/soju-rs/releases
+[soju-c]: https://github.com/pbtrung/soju-rs/tree/c-port
+[C port checkpoint]: https://github.com/pbtrung/soju-rs/blob/c-port/doc/phase11-wip.md
 [config file]: https://codeberg.org/emersion/gamja/src/branch/master/doc/config-file.md
 
 [turso guide]: https://github.com/pbtrung/soju-rs/blob/main/doc/turso.md
