@@ -43,11 +43,14 @@ ENV TWINGATE_API_ENDPOINT=/run/twingate/connector.sock \
 
 RUN printf 'soju\n' >/etc/hostname
 
+COPY healthz /usr/share/health/healthz
 COPY inetd.conf /etc/inetd.conf
 COPY .tmux.conf /usr/share/soju/.tmux.conf
 COPY entrypoint.sh /script/entrypoint.sh
 WORKDIR /data
 
-# Private: reach the login socket through Twingate only.
-EXPOSE 23/tcp
+# Keep both ports private; 8080 serves the platform HTTP health check.
+EXPOSE 23/tcp 8080/tcp
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD ["/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
 ENTRYPOINT ["/sbin/tini", "-g", "--", "/script/entrypoint.sh"]
