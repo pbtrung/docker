@@ -29,7 +29,7 @@ FROM alpine:edge
 
 RUN apk --no-cache upgrade && \
     apk --no-cache add ca-certificates tzdata su-exec busybox-extras \
-      weechat weechat-lua mimalloc3 tmux rclone tini && \
+      irssi mimalloc3 tmux rclone tini python3 && \
     addgroup -g 1000 soju && \
     adduser -u 1000 -G soju -D -H -h /data -s /bin/ash soju && \
     addgroup -S twingate && \
@@ -44,8 +44,8 @@ ENV TWINGATE_API_ENDPOINT=/run/twingate/connector.sock \
 RUN printf 'soju\n' >/etc/hostname
 
 COPY term.sh /etc/profile.d/term.sh
-COPY backup-weechat.sh /usr/local/bin/backup-weechat.sh
-COPY start-weechat.sh /usr/local/bin/start-weechat.sh
+COPY backup-irssi.sh start-irssi.sh convert-weechat.py rotate-irssi-logs.py /usr/local/bin/
+COPY irssi-startup /usr/share/soju/irssi-startup
 COPY healthz /usr/share/health/healthz
 COPY inetd.conf /etc/inetd.conf
 COPY .tmux.conf /usr/share/soju/.tmux.conf

@@ -1,0 +1,4 @@
+/weechat/
+/irssi/
+*.tar.gz
+__pycache__/

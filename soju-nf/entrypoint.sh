@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+umask 077
 
 : "${SOJU_PASSWORD:?Set SOJU_PASSWORD to the telnet password for soju}"
 : "${TWINGATE_NETWORK:?Set TWINGATE_NETWORK}"
@@ -21,14 +22,17 @@ unset SOJU_PASSWORD
 
 # Preserve existing volume contents, granting soju access to all of them.
 mkdir -p /data
-WEECHAT_HOME="${WEECHAT_HOME:-/data/weechat}"
-mkdir -p "$WEECHAT_HOME"
-chown -R soju:soju "$WEECHAT_HOME"
-chmod -R u+rwX "$WEECHAT_HOME"
+mkdir -p /data/irssi/logs
+if [ ! -f /data/irssi/config ]; then
+  python3 /usr/local/bin/convert-weechat.py /data/weechat /data/irssi/config
+fi
+cp /usr/share/soju/irssi-startup /data/irssi/startup
 cp /usr/share/soju/.tmux.conf /data/.tmux.conf
-cp /usr/local/bin/backup-weechat.sh /data/backup-weechat.sh
+cp /usr/local/bin/backup-irssi.sh /data/backup-irssi.sh
 chown -R soju:soju /data
 chmod -R u+rwX /data
+chmod 700 /data/irssi /data/irssi/logs
+chmod 600 /data/irssi/config /data/irssi/startup
 
 TWINGATE_RESOURCE_HOST="${TWINGATE_RESOURCE_HOST:-soju.internal}"
 case "$TWINGATE_RESOURCE_HOST" in
@@ -62,20 +66,15 @@ env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
 health_pid=$!
 su-exec twingate /opt/twingate/connectord &
 connector_pid=$!
-# Keep only backup settings in the cron environment, never connector tokens.
-cron_pid=
-if [ -n "${WEECHAT_BACKUP_REMOTE:-}" ]; then
-  printf '0 3 * * * /sbin/su-exec soju /usr/local/bin/backup-weechat.sh\n' >/etc/crontabs/root
-  env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    TZ="${TZ:-UTC}" DATA_DIR=/data \
-    WEECHAT_HOME="${WEECHAT_HOME:-/data/weechat}" \
-    WEECHAT_BACKUP_REMOTE="$WEECHAT_BACKUP_REMOTE" \
-    /bin/busybox crond -f -d 8 &
-  cron_pid=$!
-  printf 'Scheduling WeeChat config backup daily at 03:00\n'
-else
-  printf 'WEECHAT_BACKUP_REMOTE is unset; automatic backups disabled\n'
-fi
+# Run rotation hourly and configuration backup daily, without connector secrets.
+# Accept the old backup destination during migration.
+printf '0 * * * * /sbin/su-exec soju /usr/bin/python3 /usr/local/bin/rotate-irssi-logs.py\n0 3 * * * /sbin/su-exec soju /usr/local/bin/backup-irssi.sh\n' >/etc/crontabs/root
+env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  TZ="${TZ:-UTC}" IRSSI_HOME=/data/irssi \
+  IRSSI_BACKUP_REMOTE="${IRSSI_BACKUP_REMOTE:-${WEECHAT_BACKUP_REMOTE:-}}" \
+  /bin/busybox crond -f -d 8 &
+cron_pid=$!
+printf 'Scheduling Irssi log maintenance hourly and config backup daily at 03:00\n'
 cleanup() {
   kill -TERM "$inetd_pid" "$health_pid" "$connector_pid" ${cron_pid:+"$cron_pid"} 2>/dev/null || true
   wait "$inetd_pid" "$health_pid" "$connector_pid" ${cron_pid:+"$cron_pid"} 2>/dev/null || true
@@ -83,13 +82,14 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
+su-exec soju python3 /usr/local/bin/rotate-irssi-logs.py
 # Start detached as soju, with only the environment needed by the client.
-# Apply mimalloc to WeeChat itself, leaving tmux and the other services alone.
+# Apply mimalloc to Irssi itself, leaving tmux and the other services alone.
 env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   HOME=/data USER=soju LOGNAME=soju TERM=xterm TZ="${TZ:-UTC}" \
-  WEECHAT_HOME="$WEECHAT_HOME" \
+  IRSSI_HOME=/data/irssi \
   su-exec soju tmux new-session -d -c /data \
-    /usr/local/bin/start-weechat.sh
-printf 'Started WeeChat in tmux; attach with: tmux a\n'
+    /usr/local/bin/start-irssi.sh
+printf 'Started Irssi in tmux; attach with: tmux a\n'
 # Any service exiting stops the container so the platform can restart it.
 wait -n "$inetd_pid" "$health_pid" "$connector_pid" ${cron_pid:+"$cron_pid"}

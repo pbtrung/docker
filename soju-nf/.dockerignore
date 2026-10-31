@@ -1,0 +1,5 @@
+weechat/
+irssi/
+*.tar.gz
+__pycache__/
+tests/

@@ -1,0 +1,24 @@
+# Managed hardening commands; no Perl or other Irssi scripts are loaded.
+set max_ctcp_queue 0
+set -clear ctcp_version_reply
+set -clear ctcp_userinfo_reply
+set dcc_autoget off
+set dcc_autoresume off
+set dcc_autoaccept_lowports off
+set -clear dcc_autochat_masks
+set -clear part_message
+set -clear quit_message
+set join_auto_chans_on_invite off
+set autolog on
+set autolog_level MSGS PUBLIC NOTICES ACTIONS
+set autolog_path /data/irssi/logs/$tag/$0.log
+set log_create_mode 600
+set scrollback_lines 500
+ignore * CTCPS DCC DCCMSGS
+alias DCC echo DCC is disabled
+alias CTCP echo CTCP is disabled
+alias NCTCP echo CTCP is disabled
+alias MIRCDCC echo DCC is disabled
+alias SCRIPT echo Irssi scripting is disabled
+alias EXEC echo External command execution is disabled
+save
