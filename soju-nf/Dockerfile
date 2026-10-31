@@ -45,6 +45,7 @@ RUN printf 'soju\n' >/etc/hostname
 
 COPY term.sh /etc/profile.d/term.sh
 COPY backup-weechat.sh /usr/local/bin/backup-weechat.sh
+COPY start-weechat.sh /usr/local/bin/start-weechat.sh
 COPY healthz /usr/share/health/healthz
 COPY inetd.conf /etc/inetd.conf
 COPY .tmux.conf /usr/share/soju/.tmux.conf

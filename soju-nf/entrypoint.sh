@@ -21,6 +21,10 @@ unset SOJU_PASSWORD
 
 # Preserve existing volume contents, granting soju access to all of them.
 mkdir -p /data
+WEECHAT_HOME="${WEECHAT_HOME:-/data/weechat}"
+mkdir -p "$WEECHAT_HOME"
+chown -R soju:soju "$WEECHAT_HOME"
+chmod -R u+rwX "$WEECHAT_HOME"
 cp /usr/share/soju/.tmux.conf /data/.tmux.conf
 cp /usr/local/bin/backup-weechat.sh /data/backup-weechat.sh
 chown -R soju:soju /data
@@ -79,5 +83,13 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
+# Start detached as soju, with only the environment needed by the client.
+# Apply mimalloc to WeeChat itself, leaving tmux and the other services alone.
+env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  HOME=/data USER=soju LOGNAME=soju TERM=xterm TZ="${TZ:-UTC}" \
+  WEECHAT_HOME="$WEECHAT_HOME" \
+  su-exec soju tmux new-session -d -c /data \
+    /usr/local/bin/start-weechat.sh
+printf 'Started WeeChat in tmux; attach with: tmux a\n'
 # Any service exiting stops the container so the platform can restart it.
 wait -n "$inetd_pid" "$health_pid" "$connector_pid" ${cron_pid:+"$cron_pid"}

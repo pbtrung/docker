@@ -1,10 +1,12 @@
-# Manual WeeChat environment on Northflank
+# WeeChat in tmux on Northflank
 
-This image installs WeeChat with Lua support, tmux, and rclone for manual use. It starts a Twingate
+This image starts WeeChat with Lua support in a detached tmux session with an
+automatically assigned name, running as `soju` with `LD_PRELOAD=/usr/lib/libmimalloc.so.3`.
+It also installs rclone for manual use. It starts a Twingate
 connector and a BusyBox inetd socket listener. inetd launches telnetd only
 when a client connects; `/bin/login` authenticates the non-root `soju` account
 (UID/GID 1000). A persistent BusyBox httpd runs as `nobody` to serve
-`http://<container>:8080/healthz`. No IRC client or bouncer starts automatically. When `WEECHAT_BACKUP_REMOTE`
+`http://<container>:8080/healthz`. WeeChat uses `/data/weechat` for its configuration by default. When `WEECHAT_BACKUP_REMOTE`
 is set, cron runs the WeeChat config backup daily at 03:00.
 
 Mount the persistent volume at `/data`. This is soju's home directory; startup
@@ -20,7 +22,7 @@ Set these runtime environment variables, using secrets for passwords/tokens:
 | Variable | Purpose |
 | --- | --- |
 | `WEECHAT_BACKUP_REMOTE` | rclone destination; enables daily config backups when set |
-| `WEECHAT_HOME` | Backup source directory, default `/data/weechat` |
+| `WEECHAT_HOME` | WeeChat config and backup source directory, default `/data/weechat` |
 | `TZ` | Backup schedule time zone, default `UTC` |
 | `SOJU_PASSWORD` | Required login password for `soju`; applied on every start |
 | `TWINGATE_NETWORK` | Required Twingate network name |
@@ -58,15 +60,16 @@ With your Twingate client connected:
 
 ```sh
 telnet soju.internal 23
-# Log in as soju with SOJU_PASSWORD, then configure things yourself:
-tmux new -As irc
-weechat
+# Log in as soju with SOJU_PASSWORD, then attach to WeeChat:
+tmux a
+# Detach with Ctrl-b, then d. Configure rclone from the shell:
 rclone config
 ```
 
 Telnet carries plaintext credentials inside the encrypted Twingate tunnel;
-keep the port private. WeeChat runs in your telnet session and is not
-supervised or started on deployment. Old volume files remain available for
+keep the port private. WeeChat starts on deployment and keeps running in tmux after you disconnect.
+Quitting WeeChat closes its tmux window without restarting the container;
+restart it manually with `tmux new-session -d /usr/local/bin/start-weechat.sh`. Old volume files remain available for
 manual migration; the image no longer includes soju, gamja, nginx, SQLite
 utilities, or the old soju backup/gamja update scripts.
 
