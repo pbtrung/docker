@@ -4,20 +4,24 @@ This image installs WeeChat with Lua support, tmux, and rclone for manual use. I
 connector and a BusyBox inetd socket listener. inetd launches telnetd only
 when a client connects; `/bin/login` authenticates the non-root `soju` account
 (UID/GID 1000). A persistent BusyBox httpd runs as `nobody` to serve
-`http://<container>:8080/healthz`. No IRC client, bouncer, or backup job starts
-automatically.
+`http://<container>:8080/healthz`. No IRC client or bouncer starts automatically. When `WEECHAT_BACKUP_REMOTE`
+is set, cron runs the WeeChat config backup daily at 03:00.
 
 Mount the persistent volume at `/data`. This is soju's home directory; startup
 recursively assigns its contents to soju and grants owner read/write access
 (and directory traversal). Existing contents are preserved. WeeChat and rclone
 store their normal per-user configuration here.
 The bundled `.tmux.conf` is copied to `/data/.tmux.conf` on every startup,
-disabling the status bar and mouse support for `soju`.
+disabling the status bar and mouse support for `soju`. Login shells default to
+`TERM=xterm` through `/etc/profile.d/term.sh` so tmux works over telnet.
 
 Set these runtime environment variables, using secrets for passwords/tokens:
 
 | Variable | Purpose |
 | --- | --- |
+| `WEECHAT_BACKUP_REMOTE` | rclone destination; enables daily config backups when set |
+| `WEECHAT_HOME` | Backup source directory, default `/data/weechat` |
+| `TZ` | Backup schedule time zone, default `UTC` |
 | `SOJU_PASSWORD` | Required login password for `soju`; applied on every start |
 | `TWINGATE_NETWORK` | Required Twingate network name |
 | `TWINGATE_ACCESS_TOKEN` | Required connector access token |
@@ -42,7 +46,7 @@ not check Twingate connectivity. Run `connectorctl health` separately to check
 the connector. The Dockerfile also probes `/healthz` for runtimes that honor
 image health checks.
 `TWINGATE_REF` (default `latest`) selects the connector
-image at build time. The connector, inetd, and HTTP server are supervised; if any
+image at build time. The connector, inetd, HTTP server, and enabled cron daemon are supervised; if any
 exits the container stops for the platform to restart it.
 
 In Twingate, configure a Resource named `soju.internal` (or the configured
@@ -64,6 +68,18 @@ Telnet carries plaintext credentials inside the encrypted Twingate tunnel;
 keep the port private. WeeChat runs in your telnet session and is not
 supervised or started on deployment. Old volume files remain available for
 manual migration; the image no longer includes soju, gamja, nginx, SQLite
-utilities, or the old automatic backup/update scripts.
+utilities, or the old soju backup/gamja update scripts.
 
 Socket activation uses Alpine's [BusyBox extras](https://pkgs.alpinelinux.org/package/edge/main/x86_64/busybox-extras).
+
+Daily backups use `backup-weechat.sh`, restored from commit `84699d2`.
+Place the rclone config at `/data/rclone.conf` and set `WEECHAT_BACKUP_REMOTE`
+to your remote destination. At 03:00 in `TZ`, the job runs as `soju`, deletes
+rotated `*.zst` logs, archives only `*.conf` files under `WEECHAT_HOME` (including
+the containing directory), and uploads `weechat.tar.gz`. The local archive is
+removed after a successful upload. Cron and backup output go to container logs.
+The script is also available at `/data/backup-weechat.sh`; to run manually:
+
+```sh
+WEECHAT_BACKUP_REMOTE=remote:bucket/path /data/backup-weechat.sh
+```

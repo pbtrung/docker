@@ -43,6 +43,8 @@ ENV TWINGATE_API_ENDPOINT=/run/twingate/connector.sock \
 
 RUN printf 'soju\n' >/etc/hostname
 
+COPY term.sh /etc/profile.d/term.sh
+COPY backup-weechat.sh /usr/local/bin/backup-weechat.sh
 COPY healthz /usr/share/health/healthz
 COPY inetd.conf /etc/inetd.conf
 COPY .tmux.conf /usr/share/soju/.tmux.conf

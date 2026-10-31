@@ -22,6 +22,7 @@ unset SOJU_PASSWORD
 # Preserve existing volume contents, granting soju access to all of them.
 mkdir -p /data
 cp /usr/share/soju/.tmux.conf /data/.tmux.conf
+cp /usr/local/bin/backup-weechat.sh /data/backup-weechat.sh
 chown -R soju:soju /data
 chmod -R u+rwX /data
 
@@ -57,12 +58,26 @@ env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
 health_pid=$!
 su-exec twingate /opt/twingate/connectord &
 connector_pid=$!
+# Keep only backup settings in the cron environment, never connector tokens.
+cron_pid=
+if [ -n "${WEECHAT_BACKUP_REMOTE:-}" ]; then
+  printf '0 3 * * * /sbin/su-exec soju /usr/local/bin/backup-weechat.sh\n' >/etc/crontabs/root
+  env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    TZ="${TZ:-UTC}" DATA_DIR=/data \
+    WEECHAT_HOME="${WEECHAT_HOME:-/data/weechat}" \
+    WEECHAT_BACKUP_REMOTE="$WEECHAT_BACKUP_REMOTE" \
+    /bin/busybox crond -f -d 8 &
+  cron_pid=$!
+  printf 'Scheduling WeeChat config backup daily at 03:00\n'
+else
+  printf 'WEECHAT_BACKUP_REMOTE is unset; automatic backups disabled\n'
+fi
 cleanup() {
-  kill -TERM "$inetd_pid" "$health_pid" "$connector_pid" 2>/dev/null || true
-  wait "$inetd_pid" "$health_pid" "$connector_pid" 2>/dev/null || true
+  kill -TERM "$inetd_pid" "$health_pid" "$connector_pid" ${cron_pid:+"$cron_pid"} 2>/dev/null || true
+  wait "$inetd_pid" "$health_pid" "$connector_pid" ${cron_pid:+"$cron_pid"} 2>/dev/null || true
 }
 trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 # Any service exiting stops the container so the platform can restart it.
-wait -n "$inetd_pid" "$health_pid" "$connector_pid"
+wait -n "$inetd_pid" "$health_pid" "$connector_pid" ${cron_pid:+"$cron_pid"}
