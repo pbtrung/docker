@@ -29,7 +29,7 @@ FROM alpine:edge
 
 RUN apk --no-cache upgrade && \
     apk --no-cache add ca-certificates tzdata su-exec busybox-extras \
-      weechat weechat-lua tmux rclone tini && \
+      weechat weechat-lua mimalloc3 tmux rclone tini && \
     addgroup -g 1000 soju && \
     adduser -u 1000 -G soju -D -H -h /data -s /bin/ash soju && \
     addgroup -S twingate && \
