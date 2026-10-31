@@ -1,11 +1,6 @@
 #!/bin/sh
 set -eu
 
-# Changing the kernel hostname may be restricted by the hosting platform.
-if [ "$(hostname)" != soju ] && ! hostname soju; then
-  printf 'Cannot set hostname: configure the runtime hostname as soju\n' >&2
-fi
-
 : "${SOJU_PASSWORD:?Set SOJU_PASSWORD to the telnet password for soju}"
 : "${TWINGATE_NETWORK:?Set TWINGATE_NETWORK}"
 : "${TWINGATE_ACCESS_TOKEN:?Set TWINGATE_ACCESS_TOKEN}"
@@ -15,7 +10,13 @@ case "$SOJU_PASSWORD" in
   *"$cr"*|*'
 '*) printf 'SOJU_PASSWORD must be a single-line value\n' >&2; exit 1 ;;
 esac
-printf 'soju:%s\n' "$SOJU_PASSWORD" | chpasswd
+if password_update_output="$(printf 'soju:%s\n' "$SOJU_PASSWORD" | chpasswd 2>&1)"; then
+  printf '%s\n' "$password_update_output"
+else
+  printf '%s\n' "$password_update_output" >&2
+  exit 1
+fi
+unset password_update_output
 unset SOJU_PASSWORD
 
 # Preserve existing volume contents, granting soju access to all of them.

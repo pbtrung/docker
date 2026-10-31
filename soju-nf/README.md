@@ -29,9 +29,11 @@ secrets. Root and the Twingate service account remain locked for password login.
 
 In Northflank, build with Dockerfile `/soju-nf/Dockerfile` and context `/soju-nf`.
 Use one instance, attach `/data`, and keep TCP port **23 private**.
-Set the runtime hostname to `soju` (`--hostname soju` with Docker). The image
-also sets `/etc/hostname` and attempts to apply `soju` at startup; if the
-platform blocks hostname changes, it logs a warning and keeps running.
+Set the runtime hostname to `soju` (`--hostname soju` with Docker) where the
+platform supports it. The image sets `/etc/hostname` to `soju`, but Northflank
+controls the actual kernel hostname; startup does not attempt to change it.
+Tini runs as a child subreaper so it can reap orphaned processes even when
+the platform places another process at PID 1.
 Remove the old port 6667. Keep port **8080 private** and configure the
 Northflank HTTP health check on port **8080**, path **`/healthz`** (interval
 30 seconds, timeout 10 seconds, startup grace 60 seconds, failure threshold 3).

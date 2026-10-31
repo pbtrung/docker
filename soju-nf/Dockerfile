@@ -53,4 +53,4 @@ WORKDIR /data
 EXPOSE 23/tcp 8080/tcp
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD ["/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
-ENTRYPOINT ["/sbin/tini", "-g", "--", "/script/entrypoint.sh"]
+ENTRYPOINT ["/sbin/tini", "-s", "-g", "--", "/script/entrypoint.sh"]
