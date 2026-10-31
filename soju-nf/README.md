@@ -3,9 +3,9 @@
 This image installs WeeChat with Lua support, tmux, and rclone for manual use. It starts a Twingate
 connector and a BusyBox inetd socket listener. inetd launches telnetd only
 when a client connects; `/bin/login` authenticates the non-root `soju` account
-(UID/GID 1000). The same listener starts BusyBox httpd on demand for
+(UID/GID 1000). A persistent BusyBox httpd runs as `nobody` to serve
 `http://<container>:8080/healthz`. No IRC client, bouncer, or backup job starts
-automatically, and no HTTP daemon runs between requests.
+automatically.
 
 Mount the persistent volume at `/data`. This is soju's home directory; startup
 recursively assigns its contents to soju and grants owner read/write access
@@ -37,12 +37,12 @@ the platform places another process at PID 1.
 Remove the old port 6667. Keep port **8080 private** and configure the
 Northflank HTTP health check on port **8080**, path **`/healthz`** (interval
 30 seconds, timeout 10 seconds, startup grace 60 seconds, failure threshold 3).
-It returns HTTP 200 with `ok` and checks that inetd can serve requests; it does
+It returns HTTP 200 with `ok` and checks that the HTTP server can serve requests; it does
 not check Twingate connectivity. Run `connectorctl health` separately to check
 the connector. The Dockerfile also probes `/healthz` for runtimes that honor
 image health checks.
 `TWINGATE_REF` (default `latest`) selects the connector
-image at build time. Both the connector and inetd are supervised; if either
+image at build time. The connector, inetd, and HTTP server are supervised; if any
 exits the container stops for the platform to restart it.
 
 In Twingate, configure a Resource named `soju.internal` (or the configured

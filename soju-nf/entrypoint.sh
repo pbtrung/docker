@@ -51,14 +51,18 @@ chmod 700 /run/twingate
 env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   /bin/busybox-extras inetd -f /etc/inetd.conf &
 inetd_pid=$!
+# A persistent HTTP server handles platform probes independently of inetd.
+env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  su-exec nobody /bin/busybox-extras httpd -f -p 8080 -h /usr/share/health &
+health_pid=$!
 su-exec twingate /opt/twingate/connectord &
 connector_pid=$!
 cleanup() {
-  kill -TERM "$inetd_pid" "$connector_pid" 2>/dev/null || true
-  wait "$inetd_pid" "$connector_pid" 2>/dev/null || true
+  kill -TERM "$inetd_pid" "$health_pid" "$connector_pid" 2>/dev/null || true
+  wait "$inetd_pid" "$health_pid" "$connector_pid" 2>/dev/null || true
 }
 trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
-# Either service exiting stops the container so the platform can restart it.
-wait -n "$inetd_pid" "$connector_pid"
+# Any service exiting stops the container so the platform can restart it.
+wait -n "$inetd_pid" "$health_pid" "$connector_pid"
