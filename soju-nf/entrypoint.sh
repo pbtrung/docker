@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+# Changing the kernel hostname may be restricted by the hosting platform.
+if [ "$(hostname)" != soju ] && ! hostname soju; then
+  printf 'Cannot set hostname: configure the runtime hostname as soju\n' >&2
+fi
+
 : "${SOJU_PASSWORD:?Set SOJU_PASSWORD to the telnet password for soju}"
 : "${TWINGATE_NETWORK:?Set TWINGATE_NETWORK}"
 : "${TWINGATE_ACCESS_TOKEN:?Set TWINGATE_ACCESS_TOKEN}"

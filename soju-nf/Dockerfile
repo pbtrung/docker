@@ -29,7 +29,7 @@ FROM alpine:edge
 
 RUN apk --no-cache upgrade && \
     apk --no-cache add ca-certificates tzdata su-exec busybox-extras \
-      weechat rclone tini && \
+      weechat weechat-lua tmux rclone tini && \
     addgroup -g 1000 soju && \
     adduser -u 1000 -G soju -D -H -h /data -s /bin/ash soju && \
     addgroup -S twingate && \
@@ -40,6 +40,8 @@ RUN ln -s /opt/twingate/connectorctl /usr/local/bin/connectorctl && \
     printf 'hosts: files dns\n' >/etc/nsswitch.conf
 ENV TWINGATE_API_ENDPOINT=/run/twingate/connector.sock \
     TWINGATE_CRASH_REPORTING_DIR=/run/twingate/sentry
+
+RUN printf 'soju\n' >/etc/hostname
 
 COPY inetd.conf /etc/inetd.conf
 COPY entrypoint.sh /script/entrypoint.sh

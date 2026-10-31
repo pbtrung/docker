@@ -1,6 +1,6 @@
 # Manual WeeChat environment on Northflank
 
-This image installs WeeChat and rclone for manual use. It starts a Twingate
+This image installs WeeChat with Lua support, tmux, and rclone for manual use. It starts a Twingate
 connector and a BusyBox inetd socket listener. inetd launches telnetd only
 when a client connects; `/bin/login` authenticates the non-root `soju` account
 (UID/GID 1000). No IRC client, bouncer, web server, or backup job starts
@@ -25,7 +25,10 @@ The username is fixed as `soju`. Login sessions do not inherit deployment
 secrets. Root and the Twingate service account remain locked for password login.
 
 In Northflank, build with Dockerfile `/soju-nf/Dockerfile` and context `/soju-nf`.
-Use one instance, attach `/data`, and keep TCP port **23 private**. Remove the
+Use one instance, attach `/data`, and keep TCP port **23 private**.
+Set the runtime hostname to `soju` (`--hostname soju` with Docker). The image
+also sets `/etc/hostname` and attempts to apply `soju` at startup; if the
+platform blocks hostname changes, it logs a warning and keeps running. Remove the
 old ports 8080/6667 and HTTP health check; an exec check can use
 `connectorctl health`. `TWINGATE_REF` (default `latest`) selects the connector
 image at build time. Both the connector and inetd are supervised; if either
@@ -41,6 +44,7 @@ With your Twingate client connected:
 ```sh
 telnet soju.internal 23
 # Log in as soju with SOJU_PASSWORD, then configure things yourself:
+tmux new -As irc
 weechat
 rclone config
 ```
