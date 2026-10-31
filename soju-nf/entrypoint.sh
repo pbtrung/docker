@@ -20,6 +20,7 @@ unset SOJU_PASSWORD
 
 # Preserve existing volume contents, granting soju access to all of them.
 mkdir -p /data
+cp /usr/share/soju/.tmux.conf /data/.tmux.conf
 chown -R soju:soju /data
 chmod -R u+rwX /data
 

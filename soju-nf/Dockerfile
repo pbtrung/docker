@@ -44,6 +44,7 @@ ENV TWINGATE_API_ENDPOINT=/run/twingate/connector.sock \
 RUN printf 'soju\n' >/etc/hostname
 
 COPY inetd.conf /etc/inetd.conf
+COPY .tmux.conf /usr/share/soju/.tmux.conf
 COPY entrypoint.sh /script/entrypoint.sh
 WORKDIR /data
 

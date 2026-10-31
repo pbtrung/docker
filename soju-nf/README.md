@@ -10,6 +10,8 @@ Mount the persistent volume at `/data`. This is soju's home directory; startup
 recursively assigns its contents to soju and grants owner read/write access
 (and directory traversal). Existing contents are preserved. WeeChat and rclone
 store their normal per-user configuration here.
+The bundled `.tmux.conf` is copied to `/data/.tmux.conf` on every startup,
+disabling the status bar and mouse support for `soju`.
 
 Set these runtime environment variables, using secrets for passwords/tokens:
 
