@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 
+: "${WEECHAT_RELAY_PASSWORD:?Set WEECHAT_RELAY_PASSWORD for Glowing Bear login}"
 : "${SOJU_PASSWORD:?Set SOJU_PASSWORD to the telnet password for soju}"
 : "${TWINGATE_NETWORK:?Set TWINGATE_NETWORK}"
 : "${TWINGATE_ACCESS_TOKEN:?Set TWINGATE_ACCESS_TOKEN}"
@@ -42,6 +43,17 @@ chmod 750 /run/soju-backup
 chown root:soju /run/soju-backup/remote /run/soju-backup/weechat-home
 chmod 640 /run/soju-backup/remote /run/soju-backup/weechat-home
 
+# Keep the web client on the volume so it can be updated from a shell.
+if [ ! -f /data/glowing-bear/index.html ]; then
+  mkdir -p /data/glowing-bear
+  cp -a /usr/share/glowing-bear-dist/. /data/glowing-bear/
+fi
+chown -R soju:soju /data/glowing-bear
+chmod -R u+rwX /data/glowing-bear
+ln -sfn /data/glowing-bear /usr/share/glowing-bear
+cp /usr/local/bin/update-glowing-bear.sh /data/update-glowing-bear.sh
+chown soju:soju /data/update-glowing-bear.sh
+
 TWINGATE_RESOURCE_HOST="${TWINGATE_RESOURCE_HOST:-soju.internal}"
 case "$TWINGATE_RESOURCE_HOST" in
   ''|*[!a-zA-Z0-9.-]*) printf 'Invalid TWINGATE_RESOURCE_HOST\n' >&2; exit 1 ;;
@@ -58,7 +70,7 @@ awk -v host="$TWINGATE_RESOURCE_HOST" '
 printf '%s\t%s\n' "$pod_ip" "$TWINGATE_RESOURCE_HOST" >>/tmp/twingate-hosts
 cat /tmp/twingate-hosts >/etc/hosts
 rm -f /tmp/twingate-hosts
-printf 'Twingate Resource %s is %s (telnet port 23)\n' "$TWINGATE_RESOURCE_HOST" "$pod_ip"
+printf 'Twingate Resource %s is %s (web port 8080; telnet port 23)\n' "$TWINGATE_RESOURCE_HOST" "$pod_ip"
 
 mkdir -p /run/twingate
 chown twingate:twingate /run/twingate
@@ -68,10 +80,11 @@ chmod 700 /run/twingate
 env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   /bin/busybox-extras inetd -f /etc/inetd.conf &
 inetd_pid=$!
-# A persistent HTTP server handles platform probes independently of inetd.
+# nginx serves Glowing Bear, /healthz, and the loopback WeeChat API relay.
+nginx -t -c /script/nginx.conf
 env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-  su-exec nobody /bin/busybox-extras httpd -f -p 8080 -h /usr/share/health &
-health_pid=$!
+  nginx -c /script/nginx.conf -g 'daemon off;' &
+nginx_pid=$!
 su-exec twingate /opt/twingate/connectord &
 connector_pid=$!
 # Jobs read backup settings from /run/soju-backup, including in a clean login.
@@ -86,20 +99,22 @@ if [ -n "${WEECHAT_BACKUP_REMOTE:-}" ]; then
 else
   printf 'WEECHAT_BACKUP_REMOTE is unset; automatic backups disabled\n'
 fi
+weechat_pid=
 cleanup() {
-  kill -TERM "$inetd_pid" "$health_pid" "$connector_pid" ${cron_pid:+"$cron_pid"} 2>/dev/null || true
-  wait "$inetd_pid" "$health_pid" "$connector_pid" ${cron_pid:+"$cron_pid"} 2>/dev/null || true
+  kill -TERM "$inetd_pid" "$nginx_pid" "$connector_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"} 2>/dev/null || true
+  wait "$inetd_pid" "$nginx_pid" "$connector_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"} 2>/dev/null || true
 }
 trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
-# Start detached as soju, with only the environment needed by the client.
-# Apply mimalloc to WeeChat itself, leaving tmux and the other services alone.
+# Start headless as soju; only WeeChat receives the relay password and mimalloc.
 env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-  HOME=/data USER=soju LOGNAME=soju TERM=xterm TZ="${TZ:-UTC}" \
-  WEECHAT_HOME="$WEECHAT_HOME" \
-  su-exec soju tmux new-session -d -c /data \
-    /usr/local/bin/start-weechat.sh
-printf 'Started WeeChat in tmux; attach with: tmux a\n'
+  HOME=/data USER=soju LOGNAME=soju TZ="${TZ:-UTC}" \
+  WEECHAT_HOME="$WEECHAT_HOME" WEECHAT_RELAY_PASSWORD="$WEECHAT_RELAY_PASSWORD" \
+  WEECHAT_EXTRA_COMMANDS="${WEECHAT_EXTRA_COMMANDS:-}" \
+  su-exec soju /usr/local/bin/start-weechat.sh &
+weechat_pid=$!
+unset WEECHAT_RELAY_PASSWORD
+printf 'Started headless WeeChat and Glowing Bear on port 8080\n'
 # Any service exiting stops the container so the platform can restart it.
-wait -n "$inetd_pid" "$health_pid" "$connector_pid" ${cron_pid:+"$cron_pid"}
+wait -n "$inetd_pid" "$nginx_pid" "$connector_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"}

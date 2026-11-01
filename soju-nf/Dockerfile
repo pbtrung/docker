@@ -4,6 +4,11 @@ FROM twingate/connector:${TWINGATE_REF} AS twingate
 FROM alpine:edge AS builder
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
+ARG GLOWING_BEAR_REF=latest
+COPY update-glowing-bear.sh /usr/local/bin/
+RUN GLOWING_BEAR_DIR=/out/glowing-bear \
+    update-glowing-bear.sh "${GLOWING_BEAR_REF}"
+
 # Twingate connector: the official image's binaries are linked against glibc,
 # which Alpine doesn't have. Copy them with the glibc libraries they need
 # (from the same image) into /out/twingate, and point their ELF interpreter
@@ -29,7 +34,7 @@ FROM alpine:edge
 
 RUN apk --no-cache upgrade && \
     apk --no-cache add ca-certificates tzdata su-exec busybox-extras \
-      weechat weechat-lua mimalloc3 tmux rclone tini && \
+      weechat weechat-lua mimalloc3 tmux rclone tini nginx mailcap && \
     addgroup -g 1000 soju && \
     adduser -u 1000 -G soju -D -H -h /data -s /bin/ash soju && \
     addgroup -S twingate && \
@@ -46,7 +51,9 @@ RUN printf 'soju\n' >/etc/hostname
 COPY term.sh /etc/profile.d/term.sh
 COPY backup-weechat.sh /usr/local/bin/backup-weechat.sh
 COPY start-weechat.sh /usr/local/bin/start-weechat.sh
-COPY healthz /usr/share/health/healthz
+COPY --from=builder /out/glowing-bear /usr/share/glowing-bear-dist
+COPY nginx.conf /script/nginx.conf
+COPY update-glowing-bear.sh weechat-cmd /usr/local/bin/
 COPY inetd.conf /etc/inetd.conf
 COPY .tmux.conf /usr/share/soju/.tmux.conf
 COPY entrypoint.sh /script/entrypoint.sh

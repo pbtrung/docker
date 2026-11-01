@@ -1,79 +1,85 @@
-# WeeChat in tmux on Northflank
+# WeeChat headless + Glowing Bear on Northflank
 
-This image starts WeeChat with Lua support in a detached tmux session with an
-automatically assigned name, running as `soju` with `LD_PRELOAD=/usr/lib/libmimalloc.so.3`.
-It also installs rclone for manual use. It starts a Twingate
-connector and a BusyBox inetd socket listener. inetd launches telnetd only
-when a client connects; `/bin/login` authenticates the non-root `soju` account
-(UID/GID 1000). A persistent BusyBox httpd runs as `nobody` to serve
-`http://<container>:8080/healthz`. WeeChat uses `/data/weechat` for its configuration by default. When `WEECHAT_BACKUP_REMOTE`
-is set, cron runs the WeeChat config backup daily at 03:00.
+WeeChat runs headless as `soju` (UID/GID 1000), using `/data/weechat` and
+`LD_PRELOAD=/usr/lib/libmimalloc.so.3`. Nginx serves the bundled Glowing Bear
+web client and proxies its HTTP/WebSocket API to WeeChat on `127.0.0.1:9001`.
+No terminal client or tmux session starts automatically. Telnet remains
+socket-activated on port 23 for administration, and tmux is still installed.
 
-Mount the persistent volume at `/data`. This is soju's home directory; startup
-recursively assigns its contents to soju and grants owner read/write access
-(and directory traversal). Existing contents are preserved. WeeChat and rclone
-store their normal per-user configuration here.
-The bundled `.tmux.conf` is copied to `/data/.tmux.conf` on every startup,
-disabling the status bar and mouse support for `soju`. Login shells default to
-`TERM=xterm` through `/etc/profile.d/term.sh` so tmux works over telnet.
+Mount the existing persistent volume at `/data`; existing WeeChat configs are
+preserved. Startup grants soju read/write access to the volume and seeds
+Glowing Bear into `/data/glowing-bear` only if `index.html` is missing.
+Nginx workers run as soju so they can read the web client on that volume.
 
-Set these runtime environment variables, using secrets for passwords/tokens:
-
-| Variable | Purpose |
+| Runtime variable | Purpose |
 | --- | --- |
-| `WEECHAT_BACKUP_REMOTE` | rclone destination; enables daily config backups when set |
-| `WEECHAT_HOME` | WeeChat config and backup source directory, default `/data/weechat` |
-| `TZ` | Backup schedule time zone, default `UTC` |
-| `SOJU_PASSWORD` | Required login password for `soju`; applied on every start |
+| `WEECHAT_RELAY_PASSWORD` | Required secret for Glowing Bear login |
+| `WEECHAT_HOME` | Config/backup directory, default `/data/weechat` |
+| `WEECHAT_BACKUP_REMOTE` | rclone destination; enables daily 03:00 backup when set |
+| `SOJU_PASSWORD` | Required telnet password for fixed user `soju` |
 | `TWINGATE_NETWORK` | Required Twingate network name |
-| `TWINGATE_ACCESS_TOKEN` | Required connector access token |
-| `TWINGATE_REFRESH_TOKEN` | Required connector refresh token |
+| `TWINGATE_ACCESS_TOKEN` | Required secret connector token |
+| `TWINGATE_REFRESH_TOKEN` | Required secret connector token |
 | `TWINGATE_RESOURCE_HOST` | Resource hostname, default `soju.internal` |
+| `TZ` | WeeChat and cron time zone, default `UTC` |
+| `WEECHAT_EXTRA_COMMANDS` | Optional additional WeeChat startup commands |
 
-The username is fixed as `soju`. Login sessions do not inherit deployment
-secrets. Root and the Twingate service account remain locked for password login.
+Set `WEECHAT_RELAY_PASSWORD` before deploying this change. It is passed only
+to WeeChat; the relay config stores the environment reference instead of the
+literal password. Connector tokens are not passed to WeeChat, nginx, cron,
+or login sessions. Do not print environment variables or private config files.
 
-In Northflank, build with Dockerfile `/soju-nf/Dockerfile` and context `/soju-nf`.
-Use one instance, attach `/data`, and keep TCP port **23 private**.
-Set the runtime hostname to `soju` (`--hostname soju` with Docker) where the
-platform supports it. The image sets `/etc/hostname` to `soju`, but Northflank
-controls the actual kernel hostname; startup does not attempt to change it.
-Tini runs as a child subreaper so it can reap orphaned processes even when
-the platform places another process at PID 1.
-Remove the old port 6667. Keep port **8080 private** and configure the
-Northflank HTTP health check on port **8080**, path **`/healthz`** (interval
-30 seconds, timeout 10 seconds, startup grace 60 seconds, failure threshold 3).
-It returns HTTP 200 with `ok` and checks that the HTTP server can serve requests; it does
-not check Twingate connectivity. Run `connectorctl health` separately to check
-the connector. The Dockerfile also probes `/healthz` for runtimes that honor
-image health checks.
-`TWINGATE_REF` (default `latest`) selects the connector
-image at build time. The connector, inetd, HTTP server, and enabled cron daemon are supervised; if any
-exits the container stops for the platform to restart it.
+Build with `/soju-nf/Dockerfile`, context `/soju-nf`, one instance. Build arguments
+`TWINGATE_REF` and `GLOWING_BEAR_REF` default to `latest`. The latter selects the
+`pbtrung/glowing-bear` release installed into the image. WeeChat with Lua,
+mimalloc3, nginx, rclone, and the administration tools are installed from Alpine.
+Lua remains available but interpreter plugins and xfer are not autoloaded.
+Existing plugin autoload lists are updated; relay and FIFO are loaded explicitly.
+The headless process starts with scripts/interpreters/xfer excluded as well.
 
-In Twingate, configure a Resource named `soju.internal` (or the configured
-hostname) in this connector's Remote Network, allow TCP port 23, and grant
-your account access. The entrypoint maps the hostname to the container's
-current IPv4 address.
+Keep ports **8080** and **23 private**. In Twingate, allow port 8080 on the
+`soju.internal` Resource for the web client and port 23 for administration.
+Startup maps the hostname to the current container IPv4 address. Open:
 
-With your Twingate client connected:
-
-```sh
-telnet soju.internal 23
-# Log in as soju with SOJU_PASSWORD, then attach to WeeChat:
-tmux a
-# Detach with Ctrl-b, then d. Configure rclone from the shell:
-rclone config
+```
+http://soju.internal:8080
 ```
 
-Telnet carries plaintext credentials inside the encrypted Twingate tunnel;
-keep the port private. WeeChat starts on deployment and keeps running in tmux after you disconnect.
-Quitting WeeChat closes its tmux window without restarting the container;
-restart it manually with `tmux new-session -d /usr/local/bin/start-weechat.sh`. Old volume files remain available for
-manual migration; the image no longer includes soju, gamja, nginx, SQLite
-utilities, or the old soju backup/gamja update scripts.
+Use `WEECHAT_RELAY_PASSWORD` for the Glowing Bear connection. Nginx forwards
+`/api` to the loopback relay (API protocol, port 9001, IPv4 only). The relay port
+is not exposed. Glowing Bear's API relay does not use a TOTP secret. Existing
+relay settings are applied on every start. First-start defaults retain the
+previous privacy settings, smart filtering, automatic channel persistence,
+10 MB zstd log rotation, and empty CTCP/PART/QUIT replies.
 
-Socket activation uses Alpine's [BusyBox extras](https://pkgs.alpinelinux.org/package/edge/main/x86_64/busybox-extras).
+Nginx also serves **`/healthz`** with HTTP 200 and `ok`. Configure Northflank's
+HTTP probe on port **8080**, path **`/healthz`**, interval 30s, timeout 10s,
+startup grace 60s, and failure threshold 3. This checks nginx; it does not
+check the relay or Twingate. The Dockerfile probes the same endpoint.
+`connectorctl health` separately checks Twingate. Nginx, WeeChat, inetd,
+Twingate, and enabled cron are supervised; an exit stops the container for
+the platform to restart it. Shutdown is forwarded to WeeChat for config saves.
+Tini uses subreaper mode. The platform controls the actual kernel hostname;
+`/etc/hostname` remains `soju`.
+
+For administration, log in through Twingate with `telnet soju.internal 23`.
+The shell defaults to `TERM=xterm`. Use `weechat-cmd` to send a command through
+the running client's FIFO, without starting a second WeeChat on the same config:
+
+```sh
+weechat-cmd '/save'
+/data/backup-weechat.sh
+```
+
+Update the web client from a shell without rebuilding the image:
+
+```sh
+/data/update-glowing-bear.sh          # latest release
+/data/update-glowing-bear.sh TAG      # chosen release
+```
+
+Private source configs, converted configs, and local archives remain excluded
+from Git and Docker build contexts. No private data is bundled into the image.
 
 Daily backups use `backup-weechat.sh`, restored from commit `84699d2`.
 Place the rclone config at `/data/rclone.conf` and set `WEECHAT_BACKUP_REMOTE`
