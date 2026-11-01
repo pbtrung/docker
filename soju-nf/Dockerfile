@@ -33,7 +33,7 @@ RUN apk --no-cache add patchelf && \
 FROM alpine:edge
 
 RUN apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata su-exec \
+    apk --no-cache add ca-certificates tzdata su-exec busybox-extras \
       weechat weechat-lua mimalloc3 rclone tini nginx mailcap && \
     addgroup -g 1000 soju && \
     adduser -u 1000 -G soju -D -H -h /data -s /bin/ash soju && \
@@ -53,11 +53,14 @@ COPY start-weechat.sh /usr/local/bin/start-weechat.sh
 COPY --from=builder /out/glowing-bear /usr/share/glowing-bear-dist
 COPY nginx.conf /script/nginx.conf
 COPY update-glowing-bear.sh weechat-cmd /usr/local/bin/
+COPY setup-telnet.sh /usr/local/bin/setup-telnet.sh
+COPY inetd.conf /etc/inetd.conf
+COPY term.sh /etc/profile.d/term.sh
 COPY entrypoint.sh /script/entrypoint.sh
 WORKDIR /data
 
-# Keep port 8080 private: Glowing Bear and the HTTP health check.
-EXPOSE 8080/tcp
+# Keep both ports private: telnet and Glowing Bear/HTTP health check.
+EXPOSE 23/tcp 8080/tcp
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD ["/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
 ENTRYPOINT ["/sbin/tini", "-s", "-g", "--", "/script/entrypoint.sh"]

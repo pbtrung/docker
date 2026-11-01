@@ -3,7 +3,8 @@
 WeeChat runs headless as `soju` (UID/GID 1000), using `/data/weechat` and
 `LD_PRELOAD=/usr/lib/libmimalloc.so.3`. Nginx serves the bundled Glowing Bear
 web client and proxies its HTTP/WebSocket API to WeeChat on `127.0.0.1:9001`.
-Use the Northflank container shell for administration.
+Administration is available through Northflank’s container shell or
+socket-activated telnet on private port 23. Tmux is not installed.
 
 Mount the existing persistent volume at `/data`; existing WeeChat configs are
 preserved. Startup grants soju read/write access to the volume and seeds
@@ -12,6 +13,8 @@ Nginx workers run as soju so they can read the web client on that volume.
 
 | Runtime variable | Purpose |
 | --- | --- |
+| `TELNET_USERNAME` | Required non-root telnet login name |
+| `TELNET_PASSWORD` | Required secret telnet password, applied on every start |
 | `WEECHAT_RELAY_PASSWORD` | Required secret for Glowing Bear login |
 | `WEECHAT_HOME` | Config/backup directory, default `/data/weechat` |
 | `WEECHAT_BACKUP_REMOTE` | rclone destination; enables daily 03:00 backup when set |
@@ -34,9 +37,8 @@ Lua remains available but interpreter plugins and xfer are not autoloaded.
 Existing plugin autoload lists are updated; relay and FIFO are loaded explicitly.
 The headless process starts with scripts/interpreters/xfer excluded as well.
 
-Keep port **8080 private**. In Twingate, allow port 8080 on the
-`soju.internal` Resource for the web client. Remove the previous port 23
-from Northflank networking and the Twingate Resource; telnet is no longer run.
+Keep ports **8080 and 23 private**. In Twingate, allow port 8080 on the
+`soju.internal` Resource for the web client, and TCP port 23 for telnet.
 Startup maps the hostname to the current container IPv4 address. Open:
 
 ```
@@ -54,13 +56,25 @@ Nginx also serves **`/healthz`** with HTTP 200 and `ok`. Configure Northflank's
 HTTP probe on port **8080**, path **`/healthz`**, interval 30s, timeout 10s,
 startup grace 60s, and failure threshold 3. This checks nginx; it does not
 check the relay or Twingate. The Dockerfile probes the same endpoint.
-`connectorctl health` separately checks Twingate. Nginx, WeeChat, Twingate, and enabled cron are supervised; an exit stops the container for
+`connectorctl health` separately checks Twingate. Nginx, WeeChat, inetd, Twingate, and enabled cron are supervised; an exit stops the container for
 the platform to restart it. Shutdown is forwarded to WeeChat for config saves.
 Tini uses subreaper mode. The platform controls the actual kernel hostname;
 `/etc/hostname` remains `soju`.
 
-For administration, open the Northflank container shell. The `soju` service
-account remains password locked; no `SOJU_PASSWORD` is required.
+For administration, open the Northflank container shell or connect through
+Twingate with `telnet soju.internal 23`, using `TELNET_USERNAME` and
+`TELNET_PASSWORD`. Both values are required at startup. Choose a lowercase
+username starting with a letter or underscore, at most 32 characters, using
+letters, digits, underscores or hyphens. Existing system account names are
+rejected except `soju`.
+
+A custom login is an alias for non-root service UID/GID 1000, with `/data` as
+its home and full access to the same private files as WeeChat. Commands such
+as `whoami` may show `soju` because both names identify the same UID.
+Telnet sessions receive a clean environment without deployment secrets.
+Passwords are applied each start and then removed from the startup environment.
+Telnet carries plaintext credentials inside Twingate’s encrypted tunnel; keep
+port 23 private. `TERM` defaults to `xterm` when unset or `dumb`. No tmux is added.
 Use `weechat-cmd` to send a command through
 the running client's FIFO, without starting a second WeeChat on the same config:
 
