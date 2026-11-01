@@ -2,24 +2,9 @@
 set -eu
 
 : "${WEECHAT_RELAY_PASSWORD:?Set WEECHAT_RELAY_PASSWORD for Glowing Bear login}"
-: "${SOJU_PASSWORD:?Set SOJU_PASSWORD to the telnet password for soju}"
 : "${TWINGATE_NETWORK:?Set TWINGATE_NETWORK}"
 : "${TWINGATE_ACCESS_TOKEN:?Set TWINGATE_ACCESS_TOKEN}"
 : "${TWINGATE_REFRESH_TOKEN:?Set TWINGATE_REFRESH_TOKEN}"
-cr="$(printf '\r')"
-case "$SOJU_PASSWORD" in
-  *"$cr"*|*'
-'*) printf 'SOJU_PASSWORD must be a single-line value\n' >&2; exit 1 ;;
-esac
-if password_update_output="$(printf 'soju:%s\n' "$SOJU_PASSWORD" | chpasswd 2>&1)"; then
-  printf '%s\n' "$password_update_output"
-else
-  printf '%s\n' "$password_update_output" >&2
-  exit 1
-fi
-unset password_update_output
-unset SOJU_PASSWORD
-
 # Preserve existing volume contents, granting soju access to all of them.
 mkdir -p /data
 WEECHAT_HOME="${WEECHAT_HOME:-/data/weechat}"
@@ -70,16 +55,12 @@ awk -v host="$TWINGATE_RESOURCE_HOST" '
 printf '%s\t%s\n' "$pod_ip" "$TWINGATE_RESOURCE_HOST" >>/tmp/twingate-hosts
 cat /tmp/twingate-hosts >/etc/hosts
 rm -f /tmp/twingate-hosts
-printf 'Twingate Resource %s is %s (web port 8080; telnet port 23)\n' "$TWINGATE_RESOURCE_HOST" "$pod_ip"
+printf 'Twingate Resource %s is %s (web port 8080)\n' "$TWINGATE_RESOURCE_HOST" "$pod_ip"
 
 mkdir -p /run/twingate
 chown twingate:twingate /run/twingate
 chmod 700 /run/twingate
 
-# Keep connector tokens and other deployment secrets out of login sessions.
-env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-  /bin/busybox-extras inetd -f /etc/inetd.conf &
-inetd_pid=$!
 # nginx serves Glowing Bear, /healthz, and the loopback WeeChat API relay.
 nginx -t -c /script/nginx.conf
 env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
@@ -101,8 +82,8 @@ else
 fi
 weechat_pid=
 cleanup() {
-  kill -TERM "$inetd_pid" "$nginx_pid" "$connector_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"} 2>/dev/null || true
-  wait "$inetd_pid" "$nginx_pid" "$connector_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"} 2>/dev/null || true
+  kill -TERM "$nginx_pid" "$connector_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"} 2>/dev/null || true
+  wait "$nginx_pid" "$connector_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"} 2>/dev/null || true
 }
 trap cleanup EXIT
 trap 'exit 143' TERM
@@ -117,4 +98,4 @@ weechat_pid=$!
 unset WEECHAT_RELAY_PASSWORD
 printf 'Started headless WeeChat and Glowing Bear on port 8080\n'
 # Any service exiting stops the container so the platform can restart it.
-wait -n "$inetd_pid" "$nginx_pid" "$connector_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"}
+wait -n "$nginx_pid" "$connector_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"}

@@ -29,7 +29,7 @@ class BackupSettingsTests(unittest.TestCase):
         uploader = binaries / 'rclone'
         uploader.write_text('#!/bin/sh\nprintf "%s" "$5" > "$TEST_DEST"\ncp "$4" "$TEST_UPLOAD"\n')
         uploader.chmod(0o755)
-        # Model the stripped environments of cron and telnet; no inherited
+        # Model the stripped environments of cron and administration shells; no inherited
         # deployment values or personal config files are used by these tests.
         self.env = {'PATH': str(binaries) + ':/usr/bin:/bin',
                     'DATA_DIR': str(self.data), 'BACKUP_SETTINGS_DIR': str(self.settings),

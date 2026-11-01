@@ -33,7 +33,7 @@ RUN apk --no-cache add patchelf && \
 FROM alpine:edge
 
 RUN apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata su-exec busybox-extras \
+    apk --no-cache add ca-certificates tzdata su-exec \
       weechat weechat-lua mimalloc3 tmux rclone tini nginx mailcap && \
     addgroup -g 1000 soju && \
     adduser -u 1000 -G soju -D -H -h /data -s /bin/ash soju && \
@@ -48,19 +48,17 @@ ENV TWINGATE_API_ENDPOINT=/run/twingate/connector.sock \
 
 RUN printf 'soju\n' >/etc/hostname
 
-COPY term.sh /etc/profile.d/term.sh
 COPY backup-weechat.sh /usr/local/bin/backup-weechat.sh
 COPY start-weechat.sh /usr/local/bin/start-weechat.sh
 COPY --from=builder /out/glowing-bear /usr/share/glowing-bear-dist
 COPY nginx.conf /script/nginx.conf
 COPY update-glowing-bear.sh weechat-cmd /usr/local/bin/
-COPY inetd.conf /etc/inetd.conf
 COPY .tmux.conf /usr/share/soju/.tmux.conf
 COPY entrypoint.sh /script/entrypoint.sh
 WORKDIR /data
 
-# Keep both ports private; 8080 serves the platform HTTP health check.
-EXPOSE 23/tcp 8080/tcp
+# Keep port 8080 private: Glowing Bear and the HTTP health check.
+EXPOSE 8080/tcp
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD ["/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
 ENTRYPOINT ["/sbin/tini", "-s", "-g", "--", "/script/entrypoint.sh"]
