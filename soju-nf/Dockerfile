@@ -34,7 +34,7 @@ FROM alpine:edge
 
 RUN apk --no-cache upgrade && \
     apk --no-cache add ca-certificates tzdata su-exec \
-      weechat weechat-lua mimalloc3 tmux rclone tini nginx mailcap && \
+      weechat weechat-lua mimalloc3 rclone tini nginx mailcap && \
     addgroup -g 1000 soju && \
     adduser -u 1000 -G soju -D -H -h /data -s /bin/ash soju && \
     addgroup -S twingate && \
@@ -53,7 +53,6 @@ COPY start-weechat.sh /usr/local/bin/start-weechat.sh
 COPY --from=builder /out/glowing-bear /usr/share/glowing-bear-dist
 COPY nginx.conf /script/nginx.conf
 COPY update-glowing-bear.sh weechat-cmd /usr/local/bin/
-COPY .tmux.conf /usr/share/soju/.tmux.conf
 COPY entrypoint.sh /script/entrypoint.sh
 WORKDIR /data
 

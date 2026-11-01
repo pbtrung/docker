@@ -11,7 +11,6 @@ WEECHAT_HOME="${WEECHAT_HOME:-/data/weechat}"
 mkdir -p "$WEECHAT_HOME"
 chown -R soju:soju "$WEECHAT_HOME"
 chmod -R u+rwX "$WEECHAT_HOME"
-cp /usr/share/soju/.tmux.conf /data/.tmux.conf
 cp /usr/local/bin/backup-weechat.sh /data/backup-weechat.sh
 chown -R soju:soju /data
 chmod -R u+rwX /data

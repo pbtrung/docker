@@ -3,8 +3,7 @@
 WeeChat runs headless as `soju` (UID/GID 1000), using `/data/weechat` and
 `LD_PRELOAD=/usr/lib/libmimalloc.so.3`. Nginx serves the bundled Glowing Bear
 web client and proxies its HTTP/WebSocket API to WeeChat on `127.0.0.1:9001`.
-No terminal client or tmux session starts automatically. Use the Northflank
-container shell for administration; tmux remains installed.
+Use the Northflank container shell for administration.
 
 Mount the existing persistent volume at `/data`; existing WeeChat configs are
 preserved. Startup grants soju read/write access to the volume and seeds
