@@ -30,6 +30,18 @@ cp /usr/local/bin/backup-weechat.sh /data/backup-weechat.sh
 chown -R soju:soju /data
 chmod -R u+rwX /data
 
+# Share only backup settings with soju, not the deployment environment.
+# Recreate on every start so changed or removed values cannot become stale.
+mkdir -p /run/soju-backup
+chown root:soju /run/soju-backup
+chmod 750 /run/soju-backup
+(umask 077
+  printf '%s' "${WEECHAT_BACKUP_REMOTE:-}" >/run/soju-backup/remote
+  printf '%s' "$WEECHAT_HOME" >/run/soju-backup/weechat-home
+)
+chown root:soju /run/soju-backup/remote /run/soju-backup/weechat-home
+chmod 640 /run/soju-backup/remote /run/soju-backup/weechat-home
+
 TWINGATE_RESOURCE_HOST="${TWINGATE_RESOURCE_HOST:-soju.internal}"
 case "$TWINGATE_RESOURCE_HOST" in
   ''|*[!a-zA-Z0-9.-]*) printf 'Invalid TWINGATE_RESOURCE_HOST\n' >&2; exit 1 ;;
@@ -62,14 +74,12 @@ env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
 health_pid=$!
 su-exec twingate /opt/twingate/connectord &
 connector_pid=$!
-# Keep only backup settings in the cron environment, never connector tokens.
+# Jobs read backup settings from /run/soju-backup, including in a clean login.
 cron_pid=
 if [ -n "${WEECHAT_BACKUP_REMOTE:-}" ]; then
   printf '0 3 * * * /sbin/su-exec soju /usr/local/bin/backup-weechat.sh\n' >/etc/crontabs/root
   env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     TZ="${TZ:-UTC}" DATA_DIR=/data \
-    WEECHAT_HOME="${WEECHAT_HOME:-/data/weechat}" \
-    WEECHAT_BACKUP_REMOTE="$WEECHAT_BACKUP_REMOTE" \
     /bin/busybox crond -f -d 8 &
   cron_pid=$!
   printf 'Scheduling WeeChat config backup daily at 03:00\n'

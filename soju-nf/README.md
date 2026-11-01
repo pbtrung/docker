@@ -81,8 +81,15 @@ to your remote destination. At 03:00 in `TZ`, the job runs as `soju`, deletes
 rotated `*.zst` logs, archives only `*.conf` files under `WEECHAT_HOME` (including
 the containing directory), and uploads `weechat.tar.gz`. The local archive is
 removed after a successful upload. Cron and backup output go to container logs.
-The script is also available at `/data/backup-weechat.sh`; to run manually:
+Startup saves the backup destination and WeeChat directory as literal values in
+`/run/soju-backup` (root-owned, readable by `soju`). Both cron and manual runs
+read these settings without inheriting deployment secrets. Restart the service
+after changing its backup environment variables. An explicit environment value
+on a manual invocation overrides the saved value.
+
+The script is also available at `/data/backup-weechat.sh`; to run manually after
+configuring `WEECHAT_BACKUP_REMOTE` on the service:
 
 ```sh
-WEECHAT_BACKUP_REMOTE=remote:bucket/path /data/backup-weechat.sh
+/data/backup-weechat.sh
 ```
