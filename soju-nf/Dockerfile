@@ -2,53 +2,12 @@ ARG TWINGATE_REF=latest
 FROM twingate/connector:${TWINGATE_REF} AS twingate
 
 FROM alpine:edge AS builder
-
-# Fail a RUN when any command of a pipe fails, not just the last one
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
-ARG GAMJA_REF=latest
-ARG SOJU_REF=latest
-ARG TARGETARCH=amd64
-
-RUN apk --no-cache upgrade && \
-    apk --no-cache add jq
-
-# soju: static musl build from a pbtrung/soju-rs release (the latest one by
-# default), checked against the release's SHA256SUMS. The release metadata
-# is fetched with ADD, which downloads it on every build: when it changes
-# (a new release), the cached layers below are rebuilt. Fetching it in RUN
-# would reuse the first build's "latest" forever.
-ADD https://api.github.com/repos/pbtrung/soju-rs/releases/latest /tmp/soju-latest.json
-WORKDIR /tmp/soju
-RUN case "${TARGETARCH}" in \
-      amd64) arch=x86_64 ;; \
-      arm64) arch=aarch64 ;; \
-      *) echo "Unsupported architecture ${TARGETARCH}" >&2; exit 1 ;; \
-    esac && \
-    if [ "${SOJU_REF}" = latest ]; then \
-      tag="$(jq -er .tag_name /tmp/soju-latest.json)"; \
-    else \
-      tag="$(wget -q -O - "https://api.github.com/repos/pbtrung/soju-rs/releases/tags/${SOJU_REF}" | \
-        jq -er .tag_name)"; \
-    fi && \
-    name="soju-rs-${tag}-${arch}-unknown-linux-musl" && \
-    base="https://github.com/pbtrung/soju-rs/releases/download/${tag}" && \
-    mkdir -p /out/soju && \
-    echo "Downloading $base/$name.tar.gz" && \
-    wget -q "$base/$name.tar.gz" "$base/SHA256SUMS" && \
-    grep " $name.tar.gz\$" SHA256SUMS | sha256sum -c - && \
-    tar -xzf "$name.tar.gz" && \
-    cp "$name/soju" "$name/sojuctl" "$name/LICENSE" /out/soju/ && \
-    printf "%s\n" "$tag" >/out/soju/.version && \
-    /out/soju/soju -version
-
-# gamja: prebuilt release from pbtrung/gamja, seeded into /data/gamja on
-# first start
-ADD https://api.github.com/repos/pbtrung/gamja/releases/latest /tmp/gamja-latest.json
-COPY update-gamja.sh /usr/local/bin/
-RUN tag="${GAMJA_REF}" && \
-    if [ "$tag" = latest ]; then tag="$(jq -er .tag_name /tmp/gamja-latest.json)"; fi && \
-    GAMJA_DATA_DIR=/out/gamja update-gamja.sh "$tag"
+ARG GLOWING_BEAR_REF=latest
+COPY update-glowing-bear.sh /usr/local/bin/
+RUN GLOWING_BEAR_DIR=/out/glowing-bear \
+    update-glowing-bear.sh "${GLOWING_BEAR_REF}"
 
 # Twingate connector: the official image's binaries are linked against glibc,
 # which Alpine doesn't have. Copy them with the glibc libraries they need
@@ -73,55 +32,35 @@ RUN apk --no-cache add patchelf && \
 
 FROM alpine:edge
 
-# soju keeps uid/gid 1000: an existing /data/soju stays owned by the same
-# user
-# soju's home is /data with ash: telnet logins (setup-telnet.sh) alias this
-# non-root UID/GID, so they can run sojuctl and reach the same files.
-RUN addgroup -g 1000 soju && \
+RUN apk --no-cache upgrade && \
+    apk --no-cache add ca-certificates tzdata su-exec busybox-extras \
+      weechat weechat-lua mimalloc3 rclone tini nginx mailcap && \
+    addgroup -g 1000 soju && \
     adduser -u 1000 -G soju -D -H -h /data -s /bin/ash soju && \
     addgroup -S twingate && \
     adduser -S -G twingate -H -h /run/twingate twingate
 
-# rclone: copy DB backups off the container (backup-soju.sh, daily by crond).
-# sqlite: inspect databases and take consistent backups from a shell.
-# busybox-extras: inetd and telnetd for the private telnet login.
-# tini: reaps telnet sessions and forwards signals to entrypoint.sh.
-RUN apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata mailcap nginx su-exec \
-      rclone sqlite busybox-extras tini
-
-COPY --from=builder /out/gamja /usr/share/gamja-dist
-# soju-rs binaries have no built-in config path: the soju and sojuctl
-# wrappers in /usr/local/bin pass -config /etc/soju/config, so sojuctl works
-# without flags inside the container shell.
-COPY --from=builder /out/soju /usr/local/lib/soju
-COPY soju-wrapper.sh /usr/local/bin/soju
-COPY soju-wrapper.sh /usr/local/bin/sojuctl
-COPY soju.conf /usr/share/soju/config
 COPY --from=builder /out/twingate /opt/twingate
-RUN ln -s /opt/twingate/connectorctl /usr/local/bin/connectorctl
-# Where the connector keeps its API socket and crash reports; connectorctl
-# (e.g. `connectorctl health` from a shell) finds the socket here
+RUN ln -s /opt/twingate/connectorctl /usr/local/bin/connectorctl && \
+    printf 'hosts: files dns\n' >/etc/nsswitch.conf
 ENV TWINGATE_API_ENDPOINT=/run/twingate/connector.sock \
     TWINGATE_CRASH_REPORTING_DIR=/run/twingate/sentry
-# The connector resolves Resources with glibc, which (unlike musl) reads
-# nsswitch.conf: check /etc/hosts first, for TWINGATE_RESOURCE_HOST
-# (entrypoint.sh)
-RUN printf "hosts: files dns\n" >/etc/nsswitch.conf
 
-WORKDIR /script
-COPY entrypoint.sh /script/
+RUN printf 'soju\n' >/etc/hostname
+
+COPY backup-weechat.sh /usr/local/bin/backup-weechat.sh
+COPY start-weechat.sh /usr/local/bin/start-weechat.sh
+COPY --from=builder /out/glowing-bear /usr/share/glowing-bear-dist
 COPY nginx.conf /script/nginx.conf
-COPY update-gamja.sh /usr/local/bin/update-gamja.sh
-# Copied to /data/backup-soju.sh on start; /usr/local/bin/backup-soju.sh
-# links to that copy (entrypoint.sh).
-COPY backup-soju.sh /usr/share/soju/backup-soju.sh
+COPY update-glowing-bear.sh weechat-cmd /usr/local/bin/
 COPY setup-telnet.sh /usr/local/bin/setup-telnet.sh
 COPY inetd.conf /etc/inetd.conf
 COPY term.sh /etc/profile.d/term.sh
+COPY entrypoint.sh /script/entrypoint.sh
+WORKDIR /data
 
-# 8080: nginx (gamja + WebSocket), 6667: soju plain IRC, 23: telnet. Keep
-# all private on Northflank: they're reached through the Twingate connector.
-EXPOSE 8080 6667/tcp 23/tcp
-
+# Keep both ports private: telnet and Glowing Bear/HTTP health check.
+EXPOSE 23/tcp 8080/tcp
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD ["/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
 ENTRYPOINT ["/sbin/tini", "-s", "-g", "--", "/script/entrypoint.sh"]

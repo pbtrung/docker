@@ -1,404 +1,130 @@
-# soju + gamja + nginx on Northflank, behind Twingate
+# WeeChat headless + Glowing Bear on Northflank
 
-A single container image for [Northflank] that runs:
+WeeChat runs headless as `soju` (UID/GID 1000), using `/data/weechat` and
+musl's allocator (mimalloc is opt-in, see `WEECHAT_MALLOC`). Nginx serves the bundled Glowing Bear
+web client and proxies its HTTP/WebSocket API to WeeChat on `127.0.0.1:9001`.
+Administration is available through Northflank’s container shell or
+socket-activated telnet on private port 23. Tmux is not installed.
 
-- [soju-rs] — Rust port of the [soju] IRC bouncer: the static musl build
-  of a [pbtrung/soju-rs release][soju-rs releases], checked against its
-  `SHA256SUMS`
-- [gamja] — IRC web client, prebuilt release from the [pbtrung/gamja] fork,
-  kept on the volume so it can be updated from a shell
-- nginx — serves gamja and proxies the IRC WebSocket (`/socket`) to soju,
-  on plain HTTP port 8080
-- a [Twingate connector] — the only way in from outside: it only makes
-  outbound connections to Twingate, so no port is public
-- a daily backup of the soju database to an rclone remote (BusyBox `crond`)
-- a telnet login on private port 23 (BusyBox `inetd` + `telnetd`) for
-  administration through Twingate
+Mount the existing persistent volume at `/data`; existing WeeChat configs are
+preserved. Startup grants soju read/write access to the volume and seeds
+Glowing Bear into `/data/glowing-bear` only if `index.html` is missing.
+Nginx workers run as soju so they can read the web client on that volume.
 
-File uploads (IRCv3 filehost) are disabled: soju-rs doesn't support them
-and nginx doesn't proxy `/uploads`.
+| Runtime variable | Purpose |
+| --- | --- |
+| `TELNET_USERNAME` | Required non-root telnet login name |
+| `TELNET_PASSWORD` | Required secret telnet password, applied on every start |
+| `WEECHAT_RELAY_PASSWORD` | Required secret for Glowing Bear login |
+| `WEECHAT_HOME` | Config/backup directory, default `/data/weechat` |
+| `WEECHAT_BACKUP_REMOTE` | rclone destination; enables daily 03:00 backup when set |
+| `TWINGATE_NETWORK` | Required Twingate network name |
+| `TWINGATE_ACCESS_TOKEN` | Required secret connector token |
+| `TWINGATE_REFRESH_TOKEN` | Required secret connector token |
+| `TWINGATE_RESOURCE_HOST` | Resource hostname, default `soju.internal` |
+| `TZ` | WeeChat and cron time zone, default `UTC` |
+| `WEECHAT_EXTRA_COMMANDS` | Optional additional WeeChat startup commands |
+| `WEECHAT_MALLOC` | `musl` (default) or `mimalloc`: preloads mimalloc with `MIMALLOC_PURGE_DELAY=0` |
+
+Set `WEECHAT_RELAY_PASSWORD` before deploying this change. It is passed only
+to WeeChat; the relay config stores the environment reference instead of the
+literal password. Connector tokens are not passed to WeeChat, nginx, or cron. Do not print environment variables or private config files.
+
+Build with `/soju-nf/Dockerfile`, context `/soju-nf`, one instance. Build arguments
+`TWINGATE_REF` and `GLOWING_BEAR_REF` default to `latest`. The latter selects the
+`pbtrung/glowing-bear` release installed into the image. WeeChat with Lua,
+mimalloc3, nginx, rclone, and the administration tools are installed from Alpine.
+Lua remains available but interpreter plugins and xfer are not autoloaded.
+Existing plugin autoload lists are updated; relay and FIFO are loaded explicitly.
+The headless process starts with scripts/interpreters/xfer excluded as well.
+
+To keep memory down, every start also excludes the plugins a headless
+instance doesn't need (`spell`, `buflist`, `fset`, `script`, `typing`,
+`exec`), keeping `irc`, `relay`, `logger`, `fifo`, `trigger`, `alias` and
+`charset`; keeps 200 lines per buffer
+(`weechat.history.max_buffer_lines_number`, older lines stay in the logs);
+and sets `logger.look.backlog 0`, so opening a buffer doesn't load log lines
+into memory. The default allocator is musl's, which keeps less memory
+resident for a long-running, mostly idle process than mimalloc. Set
+`WEECHAT_MALLOC=mimalloc` to preload mimalloc instead (with
+`MIMALLOC_PURGE_DELAY=0`, returning freed memory right away) and compare.
+
+Keep ports **8080 and 23 private**. In Twingate, allow port 8080 on the
+`soju.internal` Resource for the web client, and TCP port 23 for telnet.
+Startup maps the hostname to the current container IPv4 address. Open:
 
 ```
-browser ─Twingate─▶ connector (same container) ─▶ soju.internal:8080 nginx ─┬─ /            gamja static files
-                                                                            ├─ /config.json  gamja config
-                                                                            ├─ /socket       ─▶ soju 127.0.0.1:8081 (WebSocket)
-                                                                            └─ /healthz      200 ok
-IRC client ─Twingate─▶ connector ─▶ soju.internal:6667 soju plain IRC
-telnet ─Twingate─▶ connector ─▶ soju.internal:23 inetd ─▶ telnetd ─▶ login (TELNET_USERNAME)
-Northflank health check ──▶ nginx :8080
+http://soju.internal:8080
 ```
 
-## Storage
+Use `WEECHAT_RELAY_PASSWORD` for the Glowing Bear connection. Nginx forwards
+`/api` to the loopback relay (API protocol, port 9001, IPv4 only). The relay port
+is not exposed. Glowing Bear's API relay does not use a TOTP secret. Existing
+relay settings are applied on every start. First-start defaults retain the
+previous privacy settings, smart filtering, automatic channel persistence,
+10 MB zstd log rotation, and empty CTCP/PART/QUIT replies.
 
-Accounts, networks and messages live in a local SQLite database,
-`/data/soju/main.db` (`db sqlite3` and `message-store db`), on a persistent
-volume mounted at `/data`:
+Nginx also serves **`/healthz`** with HTTP 200 and `ok`. Configure Northflank's
+HTTP probe on port **8080**, path **`/healthz`**, interval 30s, timeout 10s,
+startup grace 60s, and failure threshold 3. This checks nginx; it does not
+check the relay or Twingate. The Dockerfile probes the same endpoint.
+`connectorctl health` separately checks Twingate. Nginx, WeeChat, inetd, Twingate, and enabled cron are supervised; an exit stops the container for
+the platform to restart it. Shutdown is forwarded to WeeChat for config saves.
+Tini uses subreaper mode. The platform controls the actual kernel hostname;
+`/etc/hostname` remains `soju`.
 
-```text
-/data/
-├── soju/main.db     soju database, with its -wal and -shm files (SOJU_DATA_DIR)
-├── rclone.conf      rclone remotes for the backup (RCLONE_CONFIG_FILE), optional
-├── gamja/           gamja web client (GAMJA_DATA_DIR)
-└── update-gamja.sh  gamja updater, copied on every start
-```
+For administration, open the Northflank container shell or connect through
+Twingate with `telnet soju.internal 23`, using `TELNET_USERNAME` and
+`TELNET_PASSWORD`. Both values are required at startup. Choose a lowercase
+username starting with a letter or underscore, at most 32 characters, using
+letters, digits, underscores or hyphens. Existing system account names are
+rejected except `soju`.
 
-On every start, the entrypoint makes `/data/soju` readable only by `soju`
-(the database holds password hashes and network secrets). An existing
-`main.db` is reused: soju migrates older schemas, including databases of
-upstream Go soju, on startup.
-
-`soju.conf` sets `message-expiry 5d`: messages older than five days are
-deleted at startup and daily. soju-rs vacuums the database on startup,
-before clients can connect, and when a configuration reload changes
-`message-expiry`. Set `message-expiry 0d` in a custom config
-(`SOJU_CONFIG_FILE`) to keep messages forever.
-
-### Upgrading to soju-rs v0.99.24
-
-v0.99.24 moves the database to schema 35: the message table is clustered by
-conversation and time, which cuts the disk reads (and the memory spike)
-when a client loads history, and conversations record their latest
-mention for gamja's unread and mention badges. Older soju versions can't
-open the upgraded database: take a backup first (`backup-soju.sh`, below).
-The one-time copy of the message table needs free space on the volume up
-to about twice its size. The entrypoint waits up to `SOJU_STARTUP_TIMEOUT`
-seconds (default 1800, or 0 for unlimited) for soju to finish migrating,
-while still detecting an exited soju process.
-
-### Bootstrap admin
-
-When `SOJU_ADMIN_PASSWORD` is set, startup checks `SOJU_ADMIN_USER`
-(default `admin`) through the admin socket. A missing account is created
-as an admin. An existing admin keeps its stored password. An existing
-non-admin account, or an account lookup or creation failure, stops the
-container. Remove `SOJU_ADMIN_PASSWORD` after setup: changing it doesn't
-reset an existing password.
-
-### Backups
-
-`backup-soju.sh` takes a consistent snapshot of `main.db` with
-`sqlite3 .backup` (soju keeps writing to it and its `-wal` file, so the
-file itself could be torn) and copies it to `SOJU_BACKUP_REMOTE` with
-rclone, still named `main.db`. BusyBox `crond` runs it daily, at 03:00 by
-default (`SOJU_BACKUP_CRON`), as soju; its output goes to the container log. Run it
-from a shell for an immediate backup:
+A custom login is an alias for non-root service UID/GID 1000, with `/data` as
+its home and full access to the same private files as WeeChat. Commands such
+as `whoami` may show `soju` because both names identify the same UID.
+Telnet sessions receive a clean environment without deployment secrets.
+Startup runs as root on a volume this login can write, so it never writes
+through a symbolic link there: it refuses a linked `WEECHAT_HOME`, replaces
+a linked `/data/glowing-bear` with the bundled copy, changes owners with
+`chown -h`, and installs `backup-weechat.sh` and `update-glowing-bear.sh`
+as fresh copies.
+Passwords are applied each start and then removed from the startup environment.
+Telnet carries plaintext credentials inside Twingate’s encrypted tunnel; keep
+port 23 private. `TERM` defaults to `xterm` when unset or `dumb`. No tmux is added.
+Use `weechat-cmd` to send a command through
+the running client's FIFO, without starting a second WeeChat on the same config:
 
 ```sh
-backup-soju.sh
+weechat-cmd '/save'
+/data/backup-weechat.sh
 ```
 
-Put the rclone remotes in `/data/rclone.conf` (owned by soju, mode 600 on
-every start): without it, the job logs that it skips the backup. For
-example, for an S3-compatible bucket:
-
-```ini
-[tigris]
-type = s3
-provider = Other
-access_key_id = <key>
-secret_access_key = <secret>
-endpoint = https://fly.storage.tigris.dev
-```
-
-To restore, stop the service, put the backup at `/data/soju/main.db`
-(removing any `main.db-wal` and `main.db-shm` next to it), and start it
-again.
-
-## Files
-
-| File            | Purpose |
-| --------------- | ------- |
-| `Dockerfile`    | `builder` downloads and checks a soju-rs release and a gamja release, and copies the Twingate connector (with its glibc libraries) from `twingate/connector`; runtime stage on alpine:edge installs nginx, su-exec, rclone and sqlite with `apk` |
-| `soju.conf`     | Base config installed at `/usr/share/soju/config`: SQLite storage, message expiry, `chathistory-limit`, listeners, hostname |
-| `soju-wrapper.sh` | Installed as `soju` and `sojuctl`: runs the soju-rs binary with `-config /etc/soju/config` |
-| `entrypoint.sh` | Installs the config and gamja, schedules the backup, starts the connector and soju, bootstraps the admin, then starts nginx; forwards shutdown to soju |
-| `backup-soju.sh` | Snapshots `main.db` and copies it with rclone (daily via crond as soju, or by hand); copied to `/data/backup-soju.sh` on every start and linked from `/usr/local/bin/backup-soju.sh` |
-| `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` (`/data/gamja`) |
-| `nginx.conf`    | Serves gamja, `/config.json` and `/healthz`, proxies `/socket` to soju, per-IP limits |
-| `setup-telnet.sh` | Creates or updates the telnet login (a non-root alias of soju's UID/GID) on every start |
-| `inetd.conf`    | Starts `telnetd -l /bin/login` per connection on port 23 |
-| `term.sh`       | `/etc/profile.d` fallback: `TERM=xterm` when unset or `dumb` |
-| `tests/`        | `python3 -m unittest discover -s tests`: `setup-telnet.sh` against synthetic account files |
-
-## Environment variables
-
-| Variable                 | Default                                     | Description |
-| ------------------------ | ------------------------------------------- | ----------- |
-| `TELNET_USERNAME`        | —                                           | **Required.** Telnet login name: lowercase, starts with a letter or `_`, at most 32 characters of letters, digits, `_` or `-`; existing system accounts other than `soju` are rejected |
-| `TELNET_PASSWORD`        | —                                           | **Required.** Telnet password, single line, applied on every start. **Secret** |
-| `TWINGATE_NETWORK`       | —                                           | Twingate network name (the `<network>` of `<network>.twingate.com`) |
-| `TWINGATE_ACCESS_TOKEN`  | —                                           | Connector access token. **Secret** |
-| `TWINGATE_REFRESH_TOKEN` | —                                           | Connector refresh token. **Secret**. The connector only starts when all three are set; the tokens are removed from the environment before nginx and soju start |
-| `TWINGATE_RESOURCE_HOST` | `soju.internal`                             | Name of the Twingate Resource: mapped to the container's own IPv4 address in `/etc/hosts` on every start |
-| `SOJU_ADMIN_USER`        | `admin`                                     | Bootstrap admin username, checked when `SOJU_ADMIN_PASSWORD` is set |
-| `SOJU_ADMIN_PASSWORD`    | —                                           | Initial password for a missing bootstrap admin. **Secret**; existing passwords are kept |
-| `SOJU_STARTUP_TIMEOUT`   | `1800`                                      | Seconds to wait for migrations and startup maintenance (admin socket); `0` disables the deadline |
-| `SOJU_CONFIG_FILE`       | —                                           | Path to a soju config to use instead of the bundled `soju.conf`; keep the admin listener at `/run/soju/admin` |
-| `SOJU_DATA_DIR`          | `/data/soju`                                | Directory of `main.db`; a custom config must point `db` there |
-| `SOJU_BACKUP_CRON`       | `0 3 * * *`                                 | crond schedule of `backup-soju.sh` (container time zone, UTC by default) |
-| `SOJU_BACKUP_REMOTE`     | `tigris:skypiea/soju/`                      | rclone destination of the backup |
-| `RCLONE_CONFIG_FILE`     | `/data/rclone.conf`                         | rclone config with the remote's credentials |
-| `GAMJA_CONFIG_JSON`      | `{"server":{"auth":"mandatory","ping":30}}` | gamja [config file] contents, served at `/config.json` |
-| `GAMJA_DATA_DIR`         | `/data/gamja`                               | Where gamja is installed; `update-gamja.sh` is copied to its parent directory |
-
-Build arguments: `SOJU_REF` (default `latest`) selects the soju-rs release
-tag; `amd64` and `arm64` images are supported. `TWINGATE_REF` (default
-`latest`) selects the connector image tag. `GAMJA_REF` (default `latest`)
-selects the gamja release tag bundled in the image. It's only installed on
-a volume that doesn't have gamja yet. Release metadata is fetched on every
-build, so a rebuild picks up new releases.
-
-## Twingate
-
-### Why a name, not an IP
-
-On Fly.io the Resource is a fixed IP added to loopback. A Northflank
-container can't do that (no `NET_ADMIN`), and its own address changes with
-every restart. So the Resource is a name, `TWINGATE_RESOURCE_HOST`
-(`soju.internal`): on every start, `entrypoint.sh` maps it to the
-container's IPv4 address in `/etc/hosts`, which the connector reads (glibc,
-with `hosts: files dns` in `/etc/nsswitch.conf`). nginx listens on all
-addresses. The startup log shows `Twingate Resource soju.internal is <ip>`.
-
-### Set up
-
-In the Twingate admin console:
-
-1. Add a Remote Network (e.g. `northflank`) and a connector in it; choose
-   Docker and generate tokens. Use a Remote Network of its own: its
-   connector can only reach this container.
-2. Add a Resource in that Remote Network with the address `soju.internal`
-   and ports `8080` (gamja), `6667` (IRC) and `23` (telnet), and give your group access
-   to it.
-
-Each Resource name can only be used once across Remote Networks: if another
-one already has a `soju.internal` Resource, set `TWINGATE_RESOURCE_HOST`
-to another name here.
-
-From a device running the Twingate client, gamja is at
-`http://soju.internal:8080` and IRC at `soju.internal:6667` (plain IRC;
-Twingate encrypts the tunnel). The browser must resolve the name through the
-system resolver, i.e. the Twingate client: turn off its own secure DNS (DoH),
-or it gets `DNS_PROBE_FINISHED_NXDOMAIN`. Twingate's Secure DNS keeps the
-lookups encrypted.
-
-## Deploy on Northflank (web UI)
-
-### 1. Push this repo to a Git provider
-
-Push this repository to GitHub, GitLab or Bitbucket. In Northflank, open
-**Account / Team settings → Git integrations** and connect that provider.
-Give Northflank access to the repository.
-
-### 2. Create a project
-
-**Create new → Project**. Pick a name (e.g. `irc`) and a region close to you.
-
-### 3. Create a combined service
-
-Inside the project: **Create new → Service → Combined service** (this builds
-from Git and deploys in one service).
-
-- **Name:** `soju`
-- **Repository:** this repo, branch `main`
-- **Build type:** `Dockerfile`
-  - **Dockerfile location:** `/soju-nf/Dockerfile`
-  - **Build context:** `/soju-nf`
-  - (optional) **Build arguments:** `SOJU_REF` or `GAMJA_REF` to pin a
-    soju-rs or gamja release tag instead of the latest
-- **Resources:** the smallest compute plan is enough. **Instances: 1**: a
-  second instance would run a second connector with the same tokens.
-
-### 4. Networking
-
-Northflank reads `EXPOSE` from the Dockerfile and adds ports 8080 (HTTP),
-6667 (TCP) and 23 (TCP). Keep all three **private**: turn off **Publicly expose this port
-to the internet**. Twingate reaches them from inside the container, and the
-health check doesn't need them public either.
-
-### 5. Environment variables
-
-Under **Environment variables** (runtime), add the Twingate values, as
-**secrets** for the tokens:
-
-```
-TWINGATE_NETWORK=<network>
-TWINGATE_ACCESS_TOKEN=<access token>
-TWINGATE_REFRESH_TOKEN=<refresh token>
-```
-
-Add the telnet login (the password as a secret):
-
-```
-TELNET_USERNAME=<login>
-TELNET_PASSWORD=<a strong password>
-```
-
-Add the initial admin credentials (the password as a secret), and the
-backup destination if it differs from the default:
-
-```
-SOJU_ADMIN_USER=admin
-SOJU_ADMIN_PASSWORD=<a strong initial password>
-SOJU_BACKUP_REMOTE=<remote>:<bucket>/soju/
-```
-
-Click **Create service**. The startup log shows
-`Starting the Twingate connector for network <network>`, then the
-connector's `State: Online`; the connector also shows as connected in the
-admin console.
-
-### 6. Add a persistent volume
-
-Required: the database lives on it. Open the service → **Volumes → Add
-volume** (or attach the existing one):
-
-- **Name:** `soju-data`
-- **Size:** 1 GB is plenty with `message-expiry 5d`
-- **Mount path:** `/data`
-
-Then put the rclone config at `/data/rclone.conf` from a shell on the
-container (see [Backups](#backups)).
-
-### 7. Health check (recommended)
-
-Service → **Health checks → Add health check**:
-
-- **Protocol:** HTTP, **Port:** 8080, **Path:** `/healthz`
-- Type: readiness and/or liveness. Liveness restarts the container if
-  nginx stops answering.
-
-### 8. Log in
-
-With the Twingate client connected, open `http://soju.internal:8080`.
-gamja loads. Log in with an existing user, or `SOJU_ADMIN_USER` /
-`SOJU_ADMIN_PASSWORD` after bootstrap, then add an upstream network, either
-in gamja's "add network" UI or with `BouncerServ`:
-
-```
-/msg BouncerServ network create -addr ircs://irc.libera.chat -name libera -nick yournick
-/msg BouncerServ sasl set-plain -network libera yournick <nickserv-password>
-```
-
-`/msg BouncerServ help` lists every command. After the first start you can
-remove `SOJU_ADMIN_PASSWORD`.
-
-### 9. Manage users
-
-From gamja as an admin
-(`/msg BouncerServ user create -username bob -password <password>`), or
-from a shell on the container (service → **Containers** → **Shell**, or
-telnet, see [Telnet](#telnet)):
+Update the web client from a shell without rebuilding the image:
 
 ```sh
-sojuctl user create -username bob -password <password>
-sojuctl user status
+/data/update-glowing-bear.sh          # latest release
+/data/update-glowing-bear.sh TAG      # chosen release
 ```
 
-`sojuctl` already knows where the config is (`/etc/soju/config`). soju-rs
-has no `sojudb`: the entrypoint creates the first admin with `sojuctl` over
-the admin socket once soju is up.
+Private source configs, converted configs, and local archives remain excluded
+from Git and Docker build contexts. No private data is bundled into the image.
 
-### Backing up
+Daily backups use `backup-weechat.sh`, restored from commit `84699d2`.
+Place the rclone config at `/data/rclone.conf` and set `WEECHAT_BACKUP_REMOTE`
+to your remote destination. At 03:00 in `TZ`, the job runs as `soju`, deletes
+rotated `*.zst` logs, archives only `*.conf` files under `WEECHAT_HOME` (including
+the containing directory), and uploads `weechat.tar.gz`. The local archive is
+removed after a successful upload. Cron and backup output go to container logs.
+Startup saves the backup destination and WeeChat directory as literal values in
+`/run/soju-backup` (root-owned, readable by `soju`). Both cron and manual runs
+read these settings without inheriting deployment secrets. Restart the service
+after changing its backup environment variables. An explicit environment value
+on a manual invocation overrides the saved value.
 
-See [Backups](#backups) above: daily `backup-soju.sh` with rclone. Northflank
-volume backups also cover `/data`, but a snapshot taken while soju writes
-the database may need its `-wal` file to be consistent.
-
-### Updating
-
-- Pushing to `main` triggers a rebuild and redeploy automatically, which
-  also picks up the latest soju-rs release and Twingate connector. The
-  database survives redeploys on the volume; soju migrates its schema on
-  startup (back it up before a major upgrade).
-- gamja is updated from a shell instead (see
-  [Updating gamja](#updating-gamja)). A new image doesn't replace the copy
-  on the volume.
-
-## Updating gamja
-
-gamja is served from `/data/gamja`. On the first start the entrypoint copies
-the release bundled in the image there, and on every start it copies
-`update-gamja.sh` to `/data`. To switch to another release of
-[pbtrung/gamja] without a new image, open a shell on the container
-(service → **Containers** → **Shell**) and run:
+The script is also available at `/data/backup-weechat.sh`; to run manually after
+configuring `WEECHAT_BACKUP_REMOTE` on the service:
 
 ```sh
-/data/update-gamja.sh           # latest release
-/data/update-gamja.sh v0.999.0  # a specific release tag
-FORCE=1 /data/update-gamja.sh   # reinstall even if already installed
+/data/backup-weechat.sh
 ```
-
-It downloads the release's `.zip` asset (gamja's `dist/`, with `index.html`
-at the root or in one top-level folder), unpacks it next to the current copy and
-swaps the two directories, so nginx never serves a half-installed tree. The
-installed tag is in `/data/gamja/.version`. Reload gamja in the browser
-afterwards. No restart is needed.
-
-## Telnet
-
-With the Twingate client connected:
-
-```sh
-telnet soju.internal 23
-```
-
-and log in with `TELNET_USERNAME` / `TELNET_PASSWORD`. The login is an
-alias of soju's non-root UID/GID 1000, with `/data` as its home and
-`/bin/ash` as its shell: it can run `sojuctl` over the admin socket and
-read `/data/soju/main.db` with `sqlite3`. Startup makes everything in `/data`
-owned by `soju:soju` (`main.db` and `rclone.conf` stay private to soju), so
-the login can also run `backup-soju.sh` and `/data/update-gamja.sh`. A
-telnet session doesn't get the deployment's variables, only the settings
-those scripts need: startup writes `TZ`, `SOJU_DATA_DIR`, `GAMJA_DATA_DIR`,
-`RCLONE_CONFIG_FILE` and `SOJU_BACKUP_REMOTE` (no secrets) to
-`/etc/profile.d/soju-env.sh`, which login shells load. `whoami` may print `soju`, since both names share
-the UID. Changing `TELNET_USERNAME` locks the previous alias on the next
-start. Sessions get a clean environment, with no deployment secrets, and
-`TERM` defaults to `xterm` when unset or `dumb`. Telnet sends the password in
-plain text inside Twingate's encrypted tunnel: keep port 23 private.
-
-## Run locally
-
-```sh
-docker build --pull -t soju-nf soju-nf/
-docker run --rm -p 8080:8080 -p 6667:6667 -p 2323:23 -v soju-nf-data:/data \
-  -e TELNET_USERNAME -e TELNET_PASSWORD -e SOJU_ADMIN_USER -e SOJU_ADMIN_PASSWORD \
-  soju-nf
-```
-
-Export `TELNET_USERNAME`, `TELNET_PASSWORD`, `SOJU_ADMIN_USER` and
-`SOJU_ADMIN_PASSWORD` before running the
-command; avoid putting real passwords in shell history. Then open
-http://localhost:8080. Without the `TWINGATE_*` variables, the connector
-stays off; without `/data/rclone.conf`, backups are skipped.
-
-## Notes
-
-- Through Twingate, nginx sees every client at the connector's address, so
-  the per-IP limits apply to all Twingate users together: 60 requests per
-  minute for gamja's files (burst 30) and 20 concurrent connections. soju
-  also sees that address as every client's host (`X-Forwarded-For`,
-  trusted from loopback with `accept-proxy-ip localhost`). Any `Forwarded`
-  header from a client is dropped, since soju prefers it.
-- The connector runs as the `twingate` user, restarted 5 s after it exits.
-  The entrypoint (under `tini`) forwards shutdown to soju. If soju or inetd
-  exits, or admin bootstrap fails, the container stops so Northflank can restart it.
-- gamja sends `PING` every 30 s by default (`GAMJA_CONFIG_JSON`) to keep
-  its WebSocket open.
-- `connectorctl health` in a shell on the container checks the connector.
-- `/data` is writable by soju and the telnet login, but startup runs as
-  root, so it never writes through a symbolic link there: it refuses a
-  linked `SOJU_DATA_DIR` (or gamja's parent directory), reinstalls gamja over
-  a linked `GAMJA_DATA_DIR`, leaves a linked `rclone.conf` alone, changes
-  owners with `chown -h`, and replaces `backup-soju.sh` and
-  `update-gamja.sh` with fresh copies.
-
-[Northflank]: https://northflank.com/
-[gamja]: https://codeberg.org/emersion/gamja
-[pbtrung/gamja]: https://github.com/pbtrung/gamja
-[Twingate connector]: https://www.twingate.com/docs/connectors
-[soju]: https://soju.im/
-[soju-rs]: https://github.com/pbtrung/soju-rs
-[soju-rs releases]: https://github.com/pbtrung/soju-rs/releases
-[config file]: https://codeberg.org/emersion/gamja/src/branch/master/doc/config-file.md
