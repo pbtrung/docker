@@ -20,18 +20,42 @@ export SOJU_CONF
 /usr/local/bin/setup-telnet.sh
 unset TELNET_USERNAME TELNET_PASSWORD
 
-# Everything on the volume belongs to soju:soju, whoever copied it in, so
-# soju and the telnet login (the same UID) can manage it. Modes are kept,
-# except where tightened or opened below.
-mkdir -p /data
-chown -R soju:soju /data
+# The volume is writable by soju, and so by the telnet login (the same
+# UID), while this script runs as root: cp, chown and chmod follow symbolic
+# links, so a link planted in /data (e.g. backup-soju.sh -> /etc/shadow)
+# would redirect root's writes on the next start. Never write through a link
+# there: refuse or replace links, and copy files in fresh. No soju process
+# runs yet, so nothing can swap a path between a check and its use.
+refuse_symlink() {
+  if [ -L "$1" ]; then
+    printf '%s is a symbolic link; refusing to use it as root\n' "$1" >&2
+    exit 1
+  fi
+}
+# Install a fresh copy of $1 at $2, owned by soju: rm first, so cp creates a
+# new file instead of writing through whatever is at $2.
+install_for_soju() {
+  rm -f "$2"
+  cp "$1" "$2"
+  chown -h soju:soju "$2"
+  chmod 755 "$2"
+}
 
+# Everything on the volume belongs to soju:soju, whoever copied it in, so
+# soju and the telnet login can manage it. Modes are kept, except where
+# tightened or opened below. -h: change links themselves, not their targets
+# (-R doesn't descend into linked directories).
+mkdir -p /data
+chown -hR soju:soju /data
+
+refuse_symlink "$SOJU_DATA_DIR"
 mkdir -p "$SOJU_DATA_DIR"
 # -R: the DB (and its -wal/-shm files) may have been copied in as root, or
 # written by another user. Only soju needs to read it (it holds password
 # hashes and network secrets), and soju needs to write the directory too,
 # for the -wal and -shm files.
-chown -R soju:soju "$SOJU_DATA_DIR"
+# chmod -R skips links below the top directory, which isn't one.
+chown -hR soju:soju "$SOJU_DATA_DIR"
 chmod -R u+rwX,go-rwx "$SOJU_DATA_DIR"
 if [ -f "$SOJU_DATA_DIR/main.db" ]; then
   printf "Using the existing soju database %s\n" "$SOJU_DATA_DIR/main.db"
@@ -67,8 +91,9 @@ esac
 # gamja lives on the volume so it can be updated without a new image: run
 # update-gamja.sh (copied next to $GAMJA_DATA_DIR) from a shell. Seed it from
 # the release baked into the image on the first start; nginx serves it
-# through the /usr/share/gamja symlink.
-if [ ! -f "$GAMJA_DATA_DIR/index.html" ]; then
+# through the /usr/share/gamja symlink. A link in its place is replaced.
+refuse_symlink "$(dirname "$GAMJA_DATA_DIR")"
+if [ -L "$GAMJA_DATA_DIR" ] || [ ! -f "$GAMJA_DATA_DIR/index.html" ]; then
   printf "Installing bundled gamja %s in %s\n" \
     "$(cat /usr/share/gamja-dist/.version)" "$GAMJA_DATA_DIR"
   rm -rf "$GAMJA_DATA_DIR"
@@ -77,14 +102,12 @@ if [ ! -f "$GAMJA_DATA_DIR/index.html" ]; then
 fi
 # soju owns gamja, so update-gamja.sh works as soju; nginx workers must be
 # able to reach and read it.
-chown -R soju:soju "$GAMJA_DATA_DIR"
+chown -hR soju:soju "$GAMJA_DATA_DIR"
 chmod a+x "$(dirname "$GAMJA_DATA_DIR")"
 chmod -R a+rX "$GAMJA_DATA_DIR"
 ln -sfn "$GAMJA_DATA_DIR" /usr/share/gamja
 UPDATE_GAMJA="$(dirname "$GAMJA_DATA_DIR")/update-gamja.sh"
-cp /usr/local/bin/update-gamja.sh "$UPDATE_GAMJA"
-chown soju:soju "$UPDATE_GAMJA"
-chmod 755 "$UPDATE_GAMJA"
+install_for_soju /usr/local/bin/update-gamja.sh "$UPDATE_GAMJA"
 
 # Daily DB backup with rclone (backup-soju.sh), run by BusyBox crond as
 # soju. The script is copied to /data on every start (the image's version
@@ -92,13 +115,14 @@ chmod 755 "$UPDATE_GAMJA"
 # rclone.conf holds the storage credentials: soju only. crond runs in the
 # background, so it and its jobs keep the container's stdout and stderr
 # (-d 8: log the jobs it starts to stderr).
-cp /usr/share/soju/backup-soju.sh /data/backup-soju.sh
-chown soju:soju /data/backup-soju.sh
-chmod 755 /data/backup-soju.sh
+install_for_soju /usr/share/soju/backup-soju.sh /data/backup-soju.sh
 ln -sfn /data/backup-soju.sh /usr/local/bin/backup-soju.sh
 RCLONE_CONFIG_FILE="${RCLONE_CONFIG_FILE:-/data/rclone.conf}"
 SOJU_BACKUP_REMOTE="${SOJU_BACKUP_REMOTE:-tigris:skypiea/soju/}"
-if [ -f "$RCLONE_CONFIG_FILE" ]; then
+if [ -L "$RCLONE_CONFIG_FILE" ]; then
+  # Only soju reads it (backup-soju.sh), so leave it alone rather than fail
+  printf '%s is a symbolic link; not changing its owner or mode\n' "$RCLONE_CONFIG_FILE" >&2
+elif [ -f "$RCLONE_CONFIG_FILE" ]; then
   chown soju:soju "$RCLONE_CONFIG_FILE"
   chmod 600 "$RCLONE_CONFIG_FILE"
 fi
@@ -134,6 +158,8 @@ env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
 # gamja config, served at /config.json.
 # Default: always ask for a password, PING every 30s so idle WebSockets
 # aren't dropped by NAT or proxies along the way.
+# /tmp is world-writable: write a new file, not through one left there.
+rm -f /tmp/gamja-config.json
 printf "%s\n" "${GAMJA_CONFIG_JSON:-{\"server\":{\"auth\":\"mandatory\",\"ping\":30\}\}}" >/tmp/gamja-config.json
 
 # Twingate connector: the only way in from outside. It only makes outbound
@@ -148,6 +174,7 @@ if [ -n "${TWINGATE_NETWORK:-}" ] && [ -n "${TWINGATE_ACCESS_TOKEN:-}" ] && [ -n
   # Northflank), so map the name in /etc/hosts on every start. nginx listens
   # on all addresses.
   TWINGATE_RESOURCE_HOST="${TWINGATE_RESOURCE_HOST:-soju.internal}"
+  rm -f /tmp/hosts
   pod_ip="$(ip -4 route get 1.1.1.1 2>/dev/null |
     sed -n 's/.* src \([0-9.]*\).*/\1/p')"
   if [ -n "$pod_ip" ] &&

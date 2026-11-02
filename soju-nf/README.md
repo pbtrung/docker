@@ -387,6 +387,12 @@ stays off; without `/data/rclone.conf`, backups are skipped.
 - gamja sends `PING` every 30 s by default (`GAMJA_CONFIG_JSON`) to keep
   its WebSocket open.
 - `connectorctl health` in a shell on the container checks the connector.
+- `/data` is writable by soju and the telnet login, but startup runs as
+  root, so it never writes through a symbolic link there: it refuses a
+  linked `SOJU_DATA_DIR` (or gamja's parent directory), reinstalls gamja over
+  a linked `GAMJA_DATA_DIR`, leaves a linked `rclone.conf` alone, changes
+  owners with `chown -h`, and replaces `backup-soju.sh` and
+  `update-gamja.sh` with fresh copies.
 
 [Northflank]: https://northflank.com/
 [gamja]: https://codeberg.org/emersion/gamja
