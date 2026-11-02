@@ -349,8 +349,10 @@ alias of soju's non-root UID/GID 1000, with `/data` as its home and
 read `/data/soju/main.db` with `sqlite3`. Startup makes everything in `/data`
 owned by `soju:soju` (`main.db` and `rclone.conf` stay private to soju), so
 the login can also run `backup-soju.sh` and `/data/update-gamja.sh`. A
-telnet session doesn't get the deployment's variables: a manual
-`backup-soju.sh` uses the default `SOJU_BACKUP_REMOTE` unless you set it. `whoami` may print `soju`, since both names share
+telnet session doesn't get the deployment's variables, only the settings
+those scripts need: startup writes `TZ`, `SOJU_DATA_DIR`, `GAMJA_DATA_DIR`,
+`RCLONE_CONFIG_FILE` and `SOJU_BACKUP_REMOTE` (no secrets) to
+`/etc/profile.d/soju-env.sh`, which login shells load. `whoami` may print `soju`, since both names share
 the UID. Changing `TELNET_USERNAME` locks the previous alias on the next
 start. Sessions get a clean environment, with no deployment secrets, and
 `TERM` defaults to `xterm` when unset or `dumb`. Telnet sends the password in

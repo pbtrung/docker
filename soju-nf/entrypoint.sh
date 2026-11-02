@@ -102,6 +102,22 @@ if [ -f "$RCLONE_CONFIG_FILE" ]; then
   chown soju:soju "$RCLONE_CONFIG_FILE"
   chmod 600 "$RCLONE_CONFIG_FILE"
 fi
+
+# Telnet sessions start from a clean environment: give login shells the
+# settings backup-soju.sh and update-gamja.sh need (no secrets), quoted for
+# sh and rewritten on every start so changed values don't go stale.
+sh_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+{
+  printf '# Written by entrypoint.sh on every start\n'
+  printf 'export TZ=%s\n' "$(sh_quote "${TZ:-UTC}")"
+  printf 'export SOJU_DATA_DIR=%s\n' "$(sh_quote "$SOJU_DATA_DIR")"
+  printf 'export GAMJA_DATA_DIR=%s\n' "$(sh_quote "$GAMJA_DATA_DIR")"
+  printf 'export RCLONE_CONFIG_FILE=%s\n' "$(sh_quote "$RCLONE_CONFIG_FILE")"
+  printf 'export SOJU_BACKUP_REMOTE=%s\n' "$(sh_quote "$SOJU_BACKUP_REMOTE")"
+} >/etc/profile.d/soju-env.sh
+chmod 644 /etc/profile.d/soju-env.sh
 SOJU_BACKUP_CRON="${SOJU_BACKUP_CRON:-0 3 * * *}"
 case "$SOJU_BACKUP_CRON" in
   *"$cr"*|*'
