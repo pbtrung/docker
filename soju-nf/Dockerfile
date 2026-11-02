@@ -113,7 +113,9 @@ WORKDIR /script
 COPY entrypoint.sh /script/
 COPY nginx.conf /script/nginx.conf
 COPY update-gamja.sh /usr/local/bin/update-gamja.sh
-COPY backup-soju.sh /usr/local/bin/backup-soju.sh
+# Copied to /data/backup-soju.sh on start; /usr/local/bin/backup-soju.sh
+# links to that copy (entrypoint.sh).
+COPY backup-soju.sh /usr/share/soju/backup-soju.sh
 COPY setup-telnet.sh /usr/local/bin/setup-telnet.sh
 COPY inetd.conf /etc/inetd.conf
 COPY term.sh /etc/profile.d/term.sh

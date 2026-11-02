@@ -20,6 +20,12 @@ export SOJU_CONF
 /usr/local/bin/setup-telnet.sh
 unset TELNET_USERNAME TELNET_PASSWORD
 
+# Everything on the volume belongs to soju:soju, whoever copied it in, so
+# soju and the telnet login (the same UID) can manage it. Modes are kept,
+# except where tightened or opened below.
+mkdir -p /data
+chown -R soju:soju /data
+
 mkdir -p "$SOJU_DATA_DIR"
 # -R: the DB (and its -wal/-shm files) may have been copied in as root, or
 # written by another user. Only soju needs to read it (it holds password
@@ -69,22 +75,31 @@ if [ ! -f "$GAMJA_DATA_DIR/index.html" ]; then
   mkdir -p "$(dirname "$GAMJA_DATA_DIR")"
   cp -a /usr/share/gamja-dist "$GAMJA_DATA_DIR"
 fi
-# Root owns gamja; nginx workers must be able to reach and read it.
-chown -R root:root "$GAMJA_DATA_DIR"
+# soju owns gamja, so update-gamja.sh works as soju; nginx workers must be
+# able to reach and read it.
+chown -R soju:soju "$GAMJA_DATA_DIR"
 chmod a+x "$(dirname "$GAMJA_DATA_DIR")"
 chmod -R a+rX "$GAMJA_DATA_DIR"
 ln -sfn "$GAMJA_DATA_DIR" /usr/share/gamja
 UPDATE_GAMJA="$(dirname "$GAMJA_DATA_DIR")/update-gamja.sh"
 cp /usr/local/bin/update-gamja.sh "$UPDATE_GAMJA"
-chmod +x "$UPDATE_GAMJA"
+chown soju:soju "$UPDATE_GAMJA"
+chmod 755 "$UPDATE_GAMJA"
 
 # Daily DB backup with rclone (backup-soju.sh), run by BusyBox crond as
-# root. rclone.conf holds the storage credentials: root only. crond runs in
-# the background, so it and its jobs keep the container's stdout and stderr
+# soju. The script is copied to /data on every start (the image's version
+# wins), and /usr/local/bin/backup-soju.sh links to it for cron and shells.
+# rclone.conf holds the storage credentials: soju only. crond runs in the
+# background, so it and its jobs keep the container's stdout and stderr
 # (-d 8: log the jobs it starts to stderr).
+cp /usr/share/soju/backup-soju.sh /data/backup-soju.sh
+chown soju:soju /data/backup-soju.sh
+chmod 755 /data/backup-soju.sh
+ln -sfn /data/backup-soju.sh /usr/local/bin/backup-soju.sh
 RCLONE_CONFIG_FILE="${RCLONE_CONFIG_FILE:-/data/rclone.conf}"
+SOJU_BACKUP_REMOTE="${SOJU_BACKUP_REMOTE:-tigris:skypiea/soju/}"
 if [ -f "$RCLONE_CONFIG_FILE" ]; then
-  chown root:root "$RCLONE_CONFIG_FILE"
+  chown soju:soju "$RCLONE_CONFIG_FILE"
   chmod 600 "$RCLONE_CONFIG_FILE"
 fi
 SOJU_BACKUP_CRON="${SOJU_BACKUP_CRON:-0 3 * * *}"
@@ -92,9 +107,13 @@ case "$SOJU_BACKUP_CRON" in
   *"$cr"*|*'
 '*) printf 'SOJU_BACKUP_CRON must be a single line\n' >&2; exit 1 ;;
 esac
-printf "%s /usr/local/bin/backup-soju.sh\n" "$SOJU_BACKUP_CRON" >/etc/crontabs/root
+printf "%s /sbin/su-exec soju /usr/local/bin/backup-soju.sh\n" "$SOJU_BACKUP_CRON" >/etc/crontabs/root
 printf "Scheduling the soju DB backup: %s\n" "$SOJU_BACKUP_CRON"
-crond -f -d 8 &
+# Only the backup settings, no deployment secrets, reach crond and its jobs
+env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  TZ="${TZ:-UTC}" SOJU_DATA_DIR="$SOJU_DATA_DIR" \
+  RCLONE_CONFIG_FILE="$RCLONE_CONFIG_FILE" SOJU_BACKUP_REMOTE="$SOJU_BACKUP_REMOTE" \
+  crond -f -d 8 &
 
 # gamja config, served at /config.json.
 # Default: always ask for a password, PING every 30s so idle WebSockets

@@ -80,14 +80,14 @@ reset an existing password.
 `sqlite3 .backup` (soju keeps writing to it and its `-wal` file, so the
 file itself could be torn) and copies it to `SOJU_BACKUP_REMOTE` with
 rclone, still named `main.db`. BusyBox `crond` runs it daily, at 03:00 by
-default (`SOJU_BACKUP_CRON`); its output goes to the container log. Run it
+default (`SOJU_BACKUP_CRON`), as soju; its output goes to the container log. Run it
 from a shell for an immediate backup:
 
 ```sh
 backup-soju.sh
 ```
 
-Put the rclone remotes in `/data/rclone.conf` (owned by root, mode 600 on
+Put the rclone remotes in `/data/rclone.conf` (owned by soju, mode 600 on
 every start): without it, the job logs that it skips the backup. For
 example, for an S3-compatible bucket:
 
@@ -112,7 +112,7 @@ again.
 | `soju.conf`     | Base config installed at `/usr/share/soju/config`: SQLite storage, message expiry, `chathistory-limit`, listeners, hostname |
 | `soju-wrapper.sh` | Installed as `soju` and `sojuctl`: runs the soju-rs binary with `-config /etc/soju/config` |
 | `entrypoint.sh` | Installs the config and gamja, schedules the backup, starts the connector and soju, bootstraps the admin, then starts nginx; forwards shutdown to soju |
-| `backup-soju.sh` | Snapshots `main.db` and copies it with rclone (daily via crond, or by hand) |
+| `backup-soju.sh` | Snapshots `main.db` and copies it with rclone (daily via crond as soju, or by hand); copied to `/data/backup-soju.sh` on every start and linked from `/usr/local/bin/backup-soju.sh` |
 | `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` (`/data/gamja`) |
 | `nginx.conf`    | Serves gamja, `/config.json` and `/healthz`, proxies `/socket` to soju, per-IP limits |
 | `setup-telnet.sh` | Creates or updates the telnet login (a non-root alias of soju's UID/GID) on every start |
@@ -346,9 +346,11 @@ telnet soju.internal 23
 and log in with `TELNET_USERNAME` / `TELNET_PASSWORD`. The login is an
 alias of soju's non-root UID/GID 1000, with `/data` as its home and
 `/bin/ash` as its shell: it can run `sojuctl` over the admin socket and
-read `/data/soju/main.db` with `sqlite3`, but not root-only files such as
-`/data/rclone.conf` (run `backup-soju.sh` and `update-gamja.sh` from the
-Northflank shell, as root). `whoami` may print `soju`, since both names share
+read `/data/soju/main.db` with `sqlite3`. Startup makes everything in `/data`
+owned by `soju:soju` (`main.db` and `rclone.conf` stay private to soju), so
+the login can also run `backup-soju.sh` and `/data/update-gamja.sh`. A
+telnet session doesn't get the deployment's variables: a manual
+`backup-soju.sh` uses the default `SOJU_BACKUP_REMOTE` unless you set it. `whoami` may print `soju`, since both names share
 the UID. Changing `TELNET_USERNAME` locks the previous alias on the next
 start. Sessions get a clean environment, with no deployment secrets, and
 `TERM` defaults to `xterm` when unset or `dumb`. Telnet sends the password in
