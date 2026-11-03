@@ -4,7 +4,7 @@ WeeChat runs headless as `soju` (UID/GID 1000), using `/data/weechat` and
 musl's allocator (mimalloc is opt-in, see `WEECHAT_MALLOC`). Nginx serves the bundled Glowing Bear
 web client and proxies its HTTP/WebSocket API to WeeChat on `127.0.0.1:9001`.
 Administration is available through Northflank’s container shell or
-socket-activated telnet on private port 23. Tmux is not installed.
+socket-activated TinySSH on `127.0.0.1:22`. Tmux is not installed.
 
 Mount the existing persistent volume at `/data`; existing WeeChat configs are
 preserved. Startup grants soju read/write access to the volume and seeds
@@ -13,8 +13,8 @@ Nginx workers run as soju so they can read the web client on that volume.
 
 | Runtime variable | Purpose |
 | --- | --- |
-| `TELNET_USERNAME` | Required non-root telnet login name |
-| `TELNET_PASSWORD` | Required secret telnet password, applied on every start |
+| `SSH_USERNAME` | SSH login name, default `soju`; custom names alias UID/GID 1000 |
+| `SSH_PUBLIC_KEY` | Required Ed25519 public key for SSH login, replaced on every start |
 | `WEECHAT_RELAY_PASSWORD` | Required secret for Glowing Bear login |
 | `WEECHAT_HOME` | Config/backup directory, default `/data/weechat` |
 | `WEECHAT_BACKUP_REMOTE` | rclone destination; enables daily 03:00 backup when set |
@@ -30,7 +30,7 @@ literal password. The tunnel token is not passed to WeeChat, nginx, or cron. Do 
 Build with `/soju-nf/Dockerfile`, context `/soju-nf`, one instance. Build argument
 `GLOWING_BEAR_REF` defaults to `latest` and selects the
 `pbtrung/glowing-bear` release installed into the image. WeeChat with Lua,
-mimalloc3, nginx, rclone, cloudflared, and the administration tools are installed
+mimalloc3, nginx, rclone, TinySSH, cloudflared, and the administration tools are installed
 from Alpine. Cloudflared uses the tagged `edge/testing` repository; automatic
 self-updates are disabled, so rebuilding the image updates the package.
 Lua remains available but interpreter plugins and xfer are not autoloaded.
@@ -48,7 +48,7 @@ resident for a long-running, mostly idle process than mimalloc. Set
 `WEECHAT_MALLOC=mimalloc` to preload mimalloc instead (with
 `MIMALLOC_PURGE_DELAY=0`, returning freed memory right away) and compare.
 
-Keep ports **8080 and 23 private** in Northflank. Set `CF_TUNNEL_TOKEN` to the
+Keep port **8080 private** in Northflank; SSH binds only to `127.0.0.1:22`. Set `CF_TUNNEL_TOKEN` to the
 remotely managed tunnel's token. In the Cloudflare dashboard, configure a
 published application hostname pointing to `http://127.0.0.1:8080`, then open
 `https://<your-hostname>` for Glowing Bear. Configure Cloudflare Access for
@@ -72,27 +72,36 @@ the platform to restart it. Shutdown is forwarded to WeeChat for config saves.
 Tini uses subreaper mode. The platform controls the actual kernel hostname;
 `/etc/hostname` remains `soju`.
 
-For administration, open the Northflank container shell. To use telnet through
-Cloudflare Access, configure a separate TCP application hostname with service
-`tcp://127.0.0.1:23`, run `cloudflared access tcp --hostname <telnet-hostname>
---url 127.0.0.1:2323` on your machine, then connect with
-`telnet 127.0.0.1 2323`, using `TELNET_USERNAME` and `TELNET_PASSWORD`. Both values are required at startup. Choose a lowercase
-username starting with a letter or underscore, at most 32 characters, using
-letters, digits, underscores or hyphens. Existing system account names are
-rejected except `soju`.
+For administration, open the Northflank container shell or connect as `SSH_USERNAME`
+through Cloudflare Access. Configure a separate SSH application hostname with
+service `ssh://127.0.0.1:22` and an Access policy, then connect from your machine:
 
-A custom login is an alias for non-root service UID/GID 1000, with `/data` as
-its home and full access to the same private files as WeeChat. Commands such
-as `whoami` may show `soju` because both names identify the same UID.
-Telnet sessions receive a clean environment without deployment secrets.
-Startup runs as root on a volume this login can write, so it never writes
-through a symbolic link there: it refuses a linked `WEECHAT_HOME`, replaces
-a linked `/data/glowing-bear` with the bundled copy, changes owners with
-`chown -h`, and installs `backup-weechat.sh` and `update-glowing-bear.sh`
-as fresh copies.
-Passwords are applied each start and then removed from the startup environment.
-Telnet carries plaintext credentials inside Cloudflare’s encrypted tunnel; keep
-port 23 private. `TERM` defaults to `xterm` when unset or `dumb`. No tmux is added.
+```sh
+ssh -o 'ProxyCommand=cloudflared access ssh --hostname %h' <SSH_USERNAME>@<ssh-hostname>
+```
+
+Set `SSH_PUBLIC_KEY` to your complete `ssh-ed25519 AAAA... comment` public key.
+TinySSH supports Ed25519 login keys without authorized_keys options. Startup
+replaces `/data/.ssh/authorized_keys` with this key, with directory mode 700 and
+file mode 600. The non-root login uses UID/GID 1000, `/data` as its home, and
+has access to the same private files as WeeChat. Custom names must start with a
+lowercase letter or underscore, contain only lowercase letters, digits,
+underscores or hyphens, and be at most 32 characters. Existing system account
+names are rejected. The `soju` service account and custom aliases share the
+same home and authorized key. Password login is unavailable.
+SSH sessions receive a clean environment without deployment secrets. BusyBox
+inetd activates TinySSH per connection on IPv4 loopback only, providing the
+listener behavior of `ListenStream=127.0.0.1:22` without systemd.
+
+Host keys are generated at runtime in `/etc/tinyssh/sshkeydir` and reused on
+container restarts. Replacing the container generates a new host identity;
+verify its fingerprint through the Northflank shell before updating known_hosts.
+No host private keys are stored on the volume writable by `soju`.
+Startup refuses a linked `WEECHAT_HOME`, replaces a linked
+`/data/glowing-bear` with the bundled copy, changes owners with `chown -h`, and
+installs helper scripts as fresh copies. SSH authorization files are written
+as `soju`, so links in the volume cannot redirect root's writes.
+`TERM` defaults to `xterm` when unset or `dumb`. No tmux is added.
 Use `weechat-cmd` to send a command through
 the running client's FIFO, without starting a second WeeChat on the same config:
 

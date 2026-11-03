@@ -3,10 +3,9 @@ set -eu
 
 : "${WEECHAT_RELAY_PASSWORD:?Set WEECHAT_RELAY_PASSWORD for Glowing Bear login}"
 : "${CF_TUNNEL_TOKEN:?Set CF_TUNNEL_TOKEN for Cloudflare Tunnel}"
-/usr/local/bin/setup-telnet.sh
-unset TELNET_USERNAME TELNET_PASSWORD
+: "${SSH_PUBLIC_KEY:?Set SSH_PUBLIC_KEY to your Ed25519 public key}"
 
-# The volume is writable by soju, and so by the telnet login (the same
+# The volume is writable by soju, and so by the SSH login (the same
 # UID), while this script runs as root: cp, chown and chmod follow symbolic
 # links, so a link planted in /data (e.g. backup-weechat.sh -> /etc/shadow)
 # would redirect root's writes on the next start. Never write through a link
@@ -64,7 +63,11 @@ chmod -R u+rwX /data/glowing-bear
 ln -sfn /data/glowing-bear /usr/share/glowing-bear
 install_for_soju /usr/local/bin/update-glowing-bear.sh /data/update-glowing-bear.sh
 
-# No deployment secrets are inherited by telnet sessions.
+# Install the login key after volume permissions are set.
+/usr/local/bin/setup-ssh.sh
+unset SSH_PUBLIC_KEY SSH_USERNAME
+
+# No deployment secrets are inherited by SSH sessions.
 env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   /bin/busybox-extras inetd -f /etc/inetd.conf &
 inetd_pid=$!
