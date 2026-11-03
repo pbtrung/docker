@@ -58,6 +58,19 @@ published application hostname pointing to `http://127.0.0.1:8080`, then open
 that hostname to restrict access. Tunnel ingress is managed in Cloudflare;
 no local credentials or ingress config file is required.
 
+Use distinct public hostnames for the two routes:
+
+| Example public hostname | Tunnel service |
+| --- | --- |
+| `irc.example.com` | `http://127.0.0.1:8080` |
+| `ssh.example.com` | `ssh://127.0.0.1:22` |
+
+Each hostname needs a proxied DNS CNAME to `<TUNNEL_ID>.cfargotunnel.com`.
+Verify the records in Cloudflare DNS and open `https://irc.example.com` in
+your browser; the loopback service address is used only inside the container.
+If the browser reports a DNS error, check resolution of the public hostname
+before debugging nginx. See [Cloudflare's tunnel DNS documentation](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/dns/).
+
 Use `WEECHAT_RELAY_PASSWORD` for the Glowing Bear connection. Nginx forwards
 `/api` to the loopback relay (API protocol, port 9001, IPv4 only). The relay port
 is not exposed. Glowing Bear's API relay does not use a TOTP secret. Existing
@@ -95,6 +108,8 @@ same home and authorized key. Password login is unavailable.
 SSH sessions receive a clean environment without deployment secrets. BusyBox
 inetd activates TinySSH per connection on IPv4 loopback only, providing the
 listener behavior of `ListenStream=127.0.0.1:22` without systemd.
+The TinySSH launcher redirects stderr to the container log because BusyBox
+inetd otherwise sends diagnostics into the SSH stream, corrupting packets.
 
 Host keys are generated at runtime in `/etc/tinyssh/sshkeydir` and reused on
 container restarts. Replacing the container generates a new host identity;

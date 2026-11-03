@@ -39,6 +39,7 @@ COPY --from=builder /out/glowing-bear /usr/share/glowing-bear-dist
 COPY nginx.conf /script/nginx.conf
 COPY update-glowing-bear.sh weechat-cmd /usr/local/bin/
 COPY setup-ssh.sh /usr/local/bin/setup-ssh.sh
+COPY start-tinyssh.sh /usr/local/bin/start-tinyssh.sh
 COPY inetd.conf /etc/inetd.conf
 COPY term.sh /etc/profile.d/term.sh
 COPY entrypoint.sh /script/entrypoint.sh

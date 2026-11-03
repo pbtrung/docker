@@ -120,5 +120,31 @@ class SSHSetupTests(unittest.TestCase):
                 self.assertEqual(authorized.read_text(), KEY + '\n')
 
 
+class SSHStreamTests(unittest.TestCase):
+    def test_diagnostics_do_not_enter_protocol_stream(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            daemon = root / 'tinysshd'
+            daemon.write_text('#!/bin/sh\n'
+                              'printf "SSH-2.0-synthetic\\r\\n"\n'
+                              'printf "diagnostic before key exchange\\n" >&2\n'
+                              'cat\n'
+                              'printf "diagnostic after key exchange\\n" >&2\n')
+            daemon.chmod(0o755)
+            log = root / 'container.log'
+            launcher = root / 'start-tinyssh.sh'
+            launcher.write_text((ROOT / 'start-tinyssh.sh').read_text()
+                                .replace('/usr/sbin/tinysshd', str(daemon))
+                                .replace('/proc/1/fd/2', str(log)))
+            payload = bytes(range(256))
+            # Model inetd connecting stdout and stderr to the same stream.
+            result = subprocess.run(['sh', str(launcher)], input=payload,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, b'SSH-2.0-synthetic\r\n' + payload)
+            self.assertIn('before key exchange', log.read_text())
+            self.assertIn('after key exchange', log.read_text())
+
+
 if __name__ == '__main__':
     unittest.main()
