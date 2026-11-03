@@ -30,9 +30,12 @@ literal password. The tunnel token is not passed to WeeChat, nginx, or cron. Do 
 Build with `/soju-nf/Dockerfile`, context `/soju-nf`, one instance. Build argument
 `GLOWING_BEAR_REF` defaults to `latest` and selects the
 `pbtrung/glowing-bear` release installed into the image. WeeChat with Lua,
-mimalloc3, nginx, rclone, TinySSH, cloudflared, and the administration tools are installed
-from Alpine. Cloudflared uses the tagged `edge/testing` repository; automatic
-self-updates are disabled, so rebuilding the image updates the package.
+mimalloc3, nginx, rclone, TinySSH, and the administration tools are installed
+from Alpine. Cloudflared is downloaded from the official
+[GitHub releases](https://github.com/cloudflare/cloudflared/releases) for the
+Docker target architecture (`amd64` or `arm64`). Build argument `CLOUDFLARED_REF`
+defaults to `latest`; set it to a release tag to select a specific version.
+Automatic self-updates are disabled; rebuild the image to update cloudflared.
 Lua remains available but interpreter plugins and xfer are not autoloaded.
 Existing plugin autoload lists are updated; relay and FIFO are loaded explicitly.
 The headless process starts with scripts/interpreters/xfer excluded as well.
