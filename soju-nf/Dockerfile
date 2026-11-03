@@ -45,6 +45,8 @@ COPY term.sh /etc/profile.d/term.sh
 COPY entrypoint.sh /script/entrypoint.sh
 WORKDIR /data
 RUN mkdir -p /var/www/localhost/htdocs && printf 'ok\\n' >/var/www/localhost/htdocs/healthz
+RUN touch /tmp/lighttpd-error.log /tmp/lighttpd-access.log && \
+    chown soju:soju /tmp/lighttpd-error.log /tmp/lighttpd-access.log
 
 # SSH listens only on loopback; keep Glowing Bear/HTTP health check private.
 EXPOSE 8080/tcp
