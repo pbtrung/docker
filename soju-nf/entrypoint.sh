@@ -2,7 +2,7 @@
 set -eu
 
 : "${WEECHAT_RELAY_PASSWORD:?Set WEECHAT_RELAY_PASSWORD for Glowing Bear login}"
-: "${TUNNEL_TOKEN:?Set TUNNEL_TOKEN for Cloudflare Tunnel}"
+: "${CF_TUNNEL_TOKEN:?Set CF_TUNNEL_TOKEN for Cloudflare Tunnel}"
 /usr/local/bin/setup-telnet.sh
 unset TELNET_USERNAME TELNET_PASSWORD
 
@@ -76,10 +76,10 @@ env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
 nginx_pid=$!
 # Only cloudflared receives the tunnel token; keep it out of command arguments.
 env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-  HOME=/nonexistent TUNNEL_TOKEN="$TUNNEL_TOKEN" \
+  HOME=/nonexistent TUNNEL_TOKEN="$CF_TUNNEL_TOKEN" \
   su-exec cloudflared cloudflared tunnel --no-autoupdate run &
 tunnel_pid=$!
-unset TUNNEL_TOKEN
+unset CF_TUNNEL_TOKEN
 # Jobs read backup settings from /run/soju-backup, including in a clean login.
 cron_pid=
 if [ -n "${WEECHAT_BACKUP_REMOTE:-}" ]; then

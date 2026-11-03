@@ -18,7 +18,7 @@ Nginx workers run as soju so they can read the web client on that volume.
 | `WEECHAT_RELAY_PASSWORD` | Required secret for Glowing Bear login |
 | `WEECHAT_HOME` | Config/backup directory, default `/data/weechat` |
 | `WEECHAT_BACKUP_REMOTE` | rclone destination; enables daily 03:00 backup when set |
-| `TUNNEL_TOKEN` | Required secret token for a remotely managed Cloudflare Tunnel |
+| `CF_TUNNEL_TOKEN` | Required secret token for a remotely managed Cloudflare Tunnel |
 | `TZ` | WeeChat and cron time zone, default `UTC` |
 | `WEECHAT_EXTRA_COMMANDS` | Optional additional WeeChat startup commands |
 | `WEECHAT_MALLOC` | `musl` (default) or `mimalloc`: preloads mimalloc with `MIMALLOC_PURGE_DELAY=0` |
@@ -48,7 +48,7 @@ resident for a long-running, mostly idle process than mimalloc. Set
 `WEECHAT_MALLOC=mimalloc` to preload mimalloc instead (with
 `MIMALLOC_PURGE_DELAY=0`, returning freed memory right away) and compare.
 
-Keep ports **8080 and 23 private** in Northflank. Set `TUNNEL_TOKEN` to the
+Keep ports **8080 and 23 private** in Northflank. Set `CF_TUNNEL_TOKEN` to the
 remotely managed tunnel's token. In the Cloudflare dashboard, configure a
 published application hostname pointing to `http://127.0.0.1:8080`, then open
 `https://<your-hostname>` for Glowing Bear. Configure Cloudflare Access for
