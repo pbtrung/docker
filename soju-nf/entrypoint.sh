@@ -2,9 +2,7 @@
 set -eu
 
 : "${WEECHAT_RELAY_PASSWORD:?Set WEECHAT_RELAY_PASSWORD for Glowing Bear login}"
-: "${TWINGATE_NETWORK:?Set TWINGATE_NETWORK}"
-: "${TWINGATE_ACCESS_TOKEN:?Set TWINGATE_ACCESS_TOKEN}"
-: "${TWINGATE_REFRESH_TOKEN:?Set TWINGATE_REFRESH_TOKEN}"
+: "${TUNNEL_TOKEN:?Set TUNNEL_TOKEN for Cloudflare Tunnel}"
 /usr/local/bin/setup-telnet.sh
 unset TELNET_USERNAME TELNET_PASSWORD
 
@@ -66,30 +64,6 @@ chmod -R u+rwX /data/glowing-bear
 ln -sfn /data/glowing-bear /usr/share/glowing-bear
 install_for_soju /usr/local/bin/update-glowing-bear.sh /data/update-glowing-bear.sh
 
-TWINGATE_RESOURCE_HOST="${TWINGATE_RESOURCE_HOST:-soju.internal}"
-case "$TWINGATE_RESOURCE_HOST" in
-  ''|*[!a-zA-Z0-9.-]*) printf 'Invalid TWINGATE_RESOURCE_HOST\n' >&2; exit 1 ;;
-esac
-pod_ip="$(ip -4 route get 1.1.1.1 |
-  sed -n 's/.* src \([0-9.]*\).*/\1/p')"
-if [ -z "$pod_ip" ]; then
-  printf 'Cannot determine container IPv4 address\n' >&2
-  exit 1
-fi
-# /tmp is world-writable: write a new file, not through one left there.
-rm -f /tmp/twingate-hosts
-awk -v host="$TWINGATE_RESOURCE_HOST" '
-  { keep=1; for (i=2; i<=NF; i++) if ($i==host) keep=0; if (keep) print }
-' /etc/hosts >/tmp/twingate-hosts
-printf '%s\t%s\n' "$pod_ip" "$TWINGATE_RESOURCE_HOST" >>/tmp/twingate-hosts
-cat /tmp/twingate-hosts >/etc/hosts
-rm -f /tmp/twingate-hosts
-printf 'Twingate Resource %s is %s (web port 8080; telnet port 23)\n' "$TWINGATE_RESOURCE_HOST" "$pod_ip"
-
-mkdir -p /run/twingate
-chown twingate:twingate /run/twingate
-chmod 700 /run/twingate
-
 # No deployment secrets are inherited by telnet sessions.
 env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   /bin/busybox-extras inetd -f /etc/inetd.conf &
@@ -100,8 +74,12 @@ nginx -t -c /script/nginx.conf
 env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   nginx -c /script/nginx.conf -g 'daemon off;' &
 nginx_pid=$!
-su-exec twingate /opt/twingate/connectord &
-connector_pid=$!
+# Only cloudflared receives the tunnel token; keep it out of command arguments.
+env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  HOME=/nonexistent TUNNEL_TOKEN="$TUNNEL_TOKEN" \
+  su-exec cloudflared cloudflared tunnel --no-autoupdate run &
+tunnel_pid=$!
+unset TUNNEL_TOKEN
 # Jobs read backup settings from /run/soju-backup, including in a clean login.
 cron_pid=
 if [ -n "${WEECHAT_BACKUP_REMOTE:-}" ]; then
@@ -116,8 +94,8 @@ else
 fi
 weechat_pid=
 cleanup() {
-  kill -TERM "$inetd_pid" "$nginx_pid" "$connector_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"} 2>/dev/null || true
-  wait "$inetd_pid" "$nginx_pid" "$connector_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"} 2>/dev/null || true
+  kill -TERM "$inetd_pid" "$nginx_pid" "$tunnel_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"} 2>/dev/null || true
+  wait "$inetd_pid" "$nginx_pid" "$tunnel_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"} 2>/dev/null || true
 }
 trap cleanup EXIT
 trap 'exit 143' TERM
@@ -133,4 +111,4 @@ weechat_pid=$!
 unset WEECHAT_RELAY_PASSWORD
 printf 'Started headless WeeChat and Glowing Bear on port 8080\n'
 # Any service exiting stops the container so the platform can restart it.
-wait -n "$inetd_pid" "$nginx_pid" "$connector_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"}
+wait -n "$inetd_pid" "$nginx_pid" "$tunnel_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"}

@@ -18,22 +18,21 @@ Nginx workers run as soju so they can read the web client on that volume.
 | `WEECHAT_RELAY_PASSWORD` | Required secret for Glowing Bear login |
 | `WEECHAT_HOME` | Config/backup directory, default `/data/weechat` |
 | `WEECHAT_BACKUP_REMOTE` | rclone destination; enables daily 03:00 backup when set |
-| `TWINGATE_NETWORK` | Required Twingate network name |
-| `TWINGATE_ACCESS_TOKEN` | Required secret connector token |
-| `TWINGATE_REFRESH_TOKEN` | Required secret connector token |
-| `TWINGATE_RESOURCE_HOST` | Resource hostname, default `soju.internal` |
+| `TUNNEL_TOKEN` | Required secret token for a remotely managed Cloudflare Tunnel |
 | `TZ` | WeeChat and cron time zone, default `UTC` |
 | `WEECHAT_EXTRA_COMMANDS` | Optional additional WeeChat startup commands |
 | `WEECHAT_MALLOC` | `musl` (default) or `mimalloc`: preloads mimalloc with `MIMALLOC_PURGE_DELAY=0` |
 
 Set `WEECHAT_RELAY_PASSWORD` before deploying this change. It is passed only
 to WeeChat; the relay config stores the environment reference instead of the
-literal password. Connector tokens are not passed to WeeChat, nginx, or cron. Do not print environment variables or private config files.
+literal password. The tunnel token is not passed to WeeChat, nginx, or cron. Do not print environment variables or private config files.
 
-Build with `/soju-nf/Dockerfile`, context `/soju-nf`, one instance. Build arguments
-`TWINGATE_REF` and `GLOWING_BEAR_REF` default to `latest`. The latter selects the
+Build with `/soju-nf/Dockerfile`, context `/soju-nf`, one instance. Build argument
+`GLOWING_BEAR_REF` defaults to `latest` and selects the
 `pbtrung/glowing-bear` release installed into the image. WeeChat with Lua,
-mimalloc3, nginx, rclone, and the administration tools are installed from Alpine.
+mimalloc3, nginx, rclone, cloudflared, and the administration tools are installed
+from Alpine. Cloudflared uses the tagged `edge/testing` repository; automatic
+self-updates are disabled, so rebuilding the image updates the package.
 Lua remains available but interpreter plugins and xfer are not autoloaded.
 Existing plugin autoload lists are updated; relay and FIFO are loaded explicitly.
 The headless process starts with scripts/interpreters/xfer excluded as well.
@@ -49,13 +48,12 @@ resident for a long-running, mostly idle process than mimalloc. Set
 `WEECHAT_MALLOC=mimalloc` to preload mimalloc instead (with
 `MIMALLOC_PURGE_DELAY=0`, returning freed memory right away) and compare.
 
-Keep ports **8080 and 23 private**. In Twingate, allow port 8080 on the
-`soju.internal` Resource for the web client, and TCP port 23 for telnet.
-Startup maps the hostname to the current container IPv4 address. Open:
-
-```
-http://soju.internal:8080
-```
+Keep ports **8080 and 23 private** in Northflank. Set `TUNNEL_TOKEN` to the
+remotely managed tunnel's token. In the Cloudflare dashboard, configure a
+published application hostname pointing to `http://127.0.0.1:8080`, then open
+`https://<your-hostname>` for Glowing Bear. Configure Cloudflare Access for
+that hostname to restrict access. Tunnel ingress is managed in Cloudflare;
+no local credentials or ingress config file is required.
 
 Use `WEECHAT_RELAY_PASSWORD` for the Glowing Bear connection. Nginx forwards
 `/api` to the loopback relay (API protocol, port 9001, IPv4 only). The relay port
@@ -67,15 +65,18 @@ previous privacy settings, smart filtering, automatic channel persistence,
 Nginx also serves **`/healthz`** with HTTP 200 and `ok`. Configure Northflank's
 HTTP probe on port **8080**, path **`/healthz`**, interval 30s, timeout 10s,
 startup grace 60s, and failure threshold 3. This checks nginx; it does not
-check the relay or Twingate. The Dockerfile probes the same endpoint.
-`connectorctl health` separately checks Twingate. Nginx, WeeChat, inetd, Twingate, and enabled cron are supervised; an exit stops the container for
+check the relay or Cloudflare Tunnel. The Dockerfile probes the same endpoint.
+Cloudflared runs as its own non-root user with only the tunnel token in its
+service environment. Nginx, WeeChat, inetd, cloudflared, and enabled cron are supervised; an exit stops the container for
 the platform to restart it. Shutdown is forwarded to WeeChat for config saves.
 Tini uses subreaper mode. The platform controls the actual kernel hostname;
 `/etc/hostname` remains `soju`.
 
-For administration, open the Northflank container shell or connect through
-Twingate with `telnet soju.internal 23`, using `TELNET_USERNAME` and
-`TELNET_PASSWORD`. Both values are required at startup. Choose a lowercase
+For administration, open the Northflank container shell. To use telnet through
+Cloudflare Access, configure a separate TCP application hostname with service
+`tcp://127.0.0.1:23`, run `cloudflared access tcp --hostname <telnet-hostname>
+--url 127.0.0.1:2323` on your machine, then connect with
+`telnet 127.0.0.1 2323`, using `TELNET_USERNAME` and `TELNET_PASSWORD`. Both values are required at startup. Choose a lowercase
 username starting with a letter or underscore, at most 32 characters, using
 letters, digits, underscores or hyphens. Existing system account names are
 rejected except `soju`.
@@ -90,7 +91,7 @@ a linked `/data/glowing-bear` with the bundled copy, changes owners with
 `chown -h`, and installs `backup-weechat.sh` and `update-glowing-bear.sh`
 as fresh copies.
 Passwords are applied each start and then removed from the startup environment.
-Telnet carries plaintext credentials inside Twingate’s encrypted tunnel; keep
+Telnet carries plaintext credentials inside Cloudflare’s encrypted tunnel; keep
 port 23 private. `TERM` defaults to `xterm` when unset or `dumb`. No tmux is added.
 Use `weechat-cmd` to send a command through
 the running client's FIFO, without starting a second WeeChat on the same config:

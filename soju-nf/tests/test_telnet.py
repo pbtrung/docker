@@ -15,7 +15,7 @@ class TelnetTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.passwd = self.root / 'passwd'
         self.shadow = self.root / 'shadow'
-        self.passwd.write_text('root:x:0:0::/root:/bin/ash\nsoju:x:1000:1000::/data:/bin/ash\ntwingate:x:101:101::/run/twingate:/sbin/nologin\n')
+        self.passwd.write_text('root:x:0:0::/root:/bin/ash\nsoju:x:1000:1000::/data:/bin/ash\ncloudflared:x:101:101::/nonexistent:/sbin/nologin\n')
         self.shadow.write_text('root:!:0:0:99999:7:::\nsoju:!:0:0:99999:7:::\n')
         self.script = self.root / 'setup-telnet.sh'
         # Redirect all account-file operations into the fixture, never /etc.
@@ -56,7 +56,7 @@ class TelnetTests(unittest.TestCase):
         self.assertEqual(before, self.passwd.read_text())
 
     def test_reject_system_accounts_and_invalid_names(self):
-        for name in ['root', 'twingate', '-option', 'bad:name', 'bad\nname', 'User', 'x' * 33]:
+        for name in ['root', 'cloudflared', '-option', 'bad:name', 'bad\nname', 'User', 'x' * 33]:
             with self.subTest(name=name):
                 self.env['TELNET_USERNAME'] = name
                 self.assertNotEqual(self.run_setup().returncode, 0)
