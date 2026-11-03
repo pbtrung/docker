@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install a Glowing Bear release build from pbtrung/glowing-bear into the
-# directory nginx serves, without rebuilding the image.
+# directory lighttpd serves, without rebuilding the image.
 # Usage: update-glowing-bear.sh [tag]   (default: the latest release)
 #        FORCE=1 update-glowing-bear.sh  (reinstall even if up to date)
 set -e
@@ -34,7 +34,7 @@ if [ -z "$FORCE" ] && [ "$(cat "$DEST/.version" 2>/dev/null)" = "$tag" ]; then
 fi
 
 # Unpack next to $DEST (same filesystem), so the swap below is two renames
-# and nginx never serves a half-extracted tree.
+# and lighttpd never serves a half-extracted tree.
 mkdir -p "$(dirname "$DEST")"
 tmp="$(mktemp -d "$(dirname "$DEST")/.glowing-bear.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT

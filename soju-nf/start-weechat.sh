@@ -65,7 +65,7 @@ for plugin in $EXCLUDED_PLUGINS; do
   add_cmd "/mute /plugin unload $plugin"
 done
 # Relay settings, enforced on every start: "api" protocol (the one the
-# pbtrung/glowing-bear fork speaks) on loopback only (nginx proxies /api to
+# pbtrung/glowing-bear fork speaks) on loopback only (lighttpd proxies /api to
 # it), password from the environment. No TOTP: browsers can't send it on the
 # WebSocket connection, so a TOTP secret would lock Glowing Bear out.
 # Older terminal-only configurations excluded relay from plugin.autoload.

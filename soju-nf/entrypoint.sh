@@ -72,11 +72,11 @@ env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   /bin/busybox-extras inetd -f /etc/inetd.conf &
 inetd_pid=$!
 
-# nginx serves Glowing Bear, /healthz, and the loopback WeeChat API relay.
-nginx -t -c /script/nginx.conf
+# Lighttpd serves Glowing Bear, /healthz, and the loopback WeeChat API relay.
+lighttpd -t -f /script/lighttpd.conf
 env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-  nginx -c /script/nginx.conf -g 'daemon off;' &
-nginx_pid=$!
+  lighttpd -D -f /script/lighttpd.conf &
+lighttpd_pid=$!
 # Only cloudflared receives the tunnel token; keep it out of command arguments.
 env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   HOME=/nonexistent TUNNEL_TOKEN="$CF_TUNNEL_TOKEN" \
@@ -97,8 +97,8 @@ else
 fi
 weechat_pid=
 cleanup() {
-  kill -TERM "$inetd_pid" "$nginx_pid" "$tunnel_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"} 2>/dev/null || true
-  wait "$inetd_pid" "$nginx_pid" "$tunnel_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"} 2>/dev/null || true
+  kill -TERM "$inetd_pid" "$lighttpd_pid" "$tunnel_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"} 2>/dev/null || true
+  wait "$inetd_pid" "$lighttpd_pid" "$tunnel_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"} 2>/dev/null || true
 }
 trap cleanup EXIT
 trap 'exit 143' TERM
@@ -114,4 +114,4 @@ weechat_pid=$!
 unset WEECHAT_RELAY_PASSWORD
 printf 'Started headless WeeChat and Glowing Bear on port 8080\n'
 # Any service exiting stops the container so the platform can restart it.
-wait -n "$inetd_pid" "$nginx_pid" "$tunnel_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"}
+wait -n "$inetd_pid" "$lighttpd_pid" "$tunnel_pid" ${weechat_pid:+"$weechat_pid"} ${cron_pid:+"$cron_pid"}

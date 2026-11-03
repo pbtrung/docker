@@ -1,7 +1,7 @@
 # WeeChat headless + Glowing Bear on Northflank
 
 WeeChat runs headless as `soju` (UID/GID 1000), using `/data/weechat` and
-musl's allocator (mimalloc is opt-in, see `WEECHAT_MALLOC`). Nginx serves the bundled Glowing Bear
+musl's allocator (mimalloc is opt-in, see `WEECHAT_MALLOC`). Lighttpd serves the bundled Glowing Bear
 web client and proxies its HTTP/WebSocket API to WeeChat on `127.0.0.1:9001`.
 Administration is available through Northflank’s container shell or
 socket-activated TinySSH on `127.0.0.1:22`. Tmux is not installed.
@@ -9,7 +9,7 @@ socket-activated TinySSH on `127.0.0.1:22`. Tmux is not installed.
 Mount the existing persistent volume at `/data`; existing WeeChat configs are
 preserved. Startup grants soju read/write access to the volume and seeds
 Glowing Bear into `/data/glowing-bear` only if `index.html` is missing.
-Nginx workers run as soju so they can read the web client on that volume.
+Lighttpd runs as soju so it can read the web client on that volume.
 
 | Runtime variable | Purpose |
 | --- | --- |
@@ -25,12 +25,12 @@ Nginx workers run as soju so they can read the web client on that volume.
 
 Set `WEECHAT_RELAY_PASSWORD` before deploying this change. It is passed only
 to WeeChat; the relay config stores the environment reference instead of the
-literal password. The tunnel token is not passed to WeeChat, nginx, or cron. Do not print environment variables or private config files.
+literal password. The tunnel token is not passed to WeeChat, lighttpd, or cron. Do not print environment variables or private config files.
 
 Build with `/soju-nf/Dockerfile`, context `/soju-nf`, one instance. Build argument
 `GLOWING_BEAR_REF` defaults to `latest` and selects the
 `pbtrung/glowing-bear` release installed into the image. WeeChat with Lua,
-mimalloc3, nginx, rclone, TinySSH, and the administration tools are installed
+mimalloc3, lighttpd, rclone, TinySSH, and the administration tools are installed
 from Alpine. Cloudflared is downloaded from the official
 [GitHub releases](https://github.com/cloudflare/cloudflared/releases) for the
 Docker target architecture (`amd64` or `arm64`). Build argument `CLOUDFLARED_REF`
@@ -69,21 +69,21 @@ Each hostname needs a proxied DNS CNAME to `<TUNNEL_ID>.cfargotunnel.com`.
 Verify the records in Cloudflare DNS and open `https://irc.example.com` in
 your browser; the loopback service address is used only inside the container.
 If the browser reports a DNS error, check resolution of the public hostname
-before debugging nginx. See [Cloudflare's tunnel DNS documentation](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/dns/).
+before debugging lighttpd. See [Cloudflare's tunnel DNS documentation](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/dns/).
 
-Use `WEECHAT_RELAY_PASSWORD` for the Glowing Bear connection. Nginx forwards
+Use `WEECHAT_RELAY_PASSWORD` for the Glowing Bear connection. Lighttpd forwards
 `/api` to the loopback relay (API protocol, port 9001, IPv4 only). The relay port
 is not exposed. Glowing Bear's API relay does not use a TOTP secret. Existing
 relay settings are applied on every start. First-start defaults retain the
 previous privacy settings, smart filtering, automatic channel persistence,
 10 MB zstd log rotation, and empty CTCP/PART/QUIT replies.
 
-Nginx also serves **`/healthz`** with HTTP 200 and `ok`. Configure Northflank's
+Lighttpd also serves **`/healthz`** with HTTP 200 and `ok`. Configure Northflank's
 HTTP probe on port **8080**, path **`/healthz`**, interval 30s, timeout 10s,
-startup grace 60s, and failure threshold 3. This checks nginx; it does not
+startup grace 60s, and failure threshold 3. This checks lighttpd; it does not
 check the relay or Cloudflare Tunnel. The Dockerfile probes the same endpoint.
 Cloudflared runs as its own non-root user with only the tunnel token in its
-service environment. Nginx, WeeChat, inetd, cloudflared, and enabled cron are supervised; an exit stops the container for
+service environment. Lighttpd, WeeChat, inetd, cloudflared, and enabled cron are supervised; an exit stops the container for
 the platform to restart it. Shutdown is forwarded to WeeChat for config saves.
 Tini uses subreaper mode. The platform controls the actual kernel hostname;
 `/etc/hostname` remains `soju`.
