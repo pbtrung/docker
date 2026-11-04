@@ -1,74 +1,90 @@
-"""Exercise backup settings using synthetic files and a fake uploader."""
-import os
+"""Verify live SQLite snapshots with a synthetic database and local uploader."""
 from pathlib import Path
+import os
+import shutil
+import sqlite3
 import subprocess
-import tarfile
 import tempfile
 import unittest
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'backup-weechat.sh'
+SCRIPT = Path(__file__).resolve().parents[1] / 'backup-soju.sh'
 
 
-class BackupSettingsTests(unittest.TestCase):
+@unittest.skipUnless(shutil.which('sqlite3'), 'requires sqlite3 CLI')
+class BackupTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.data = self.root / 'data'
-        self.home = self.data / 'custom-weechat'
-        self.home.mkdir(parents=True)
-        (self.home / 'IRC.CONF').write_text('synthetic config')
-        (self.home / 'chat.log').write_text('excluded log')
-        (self.home / 'rotated.zst').write_text('rotated log')
-        self.settings = self.root / 'settings'
-        self.settings.mkdir()
-        (self.settings / 'remote').write_text('test-remote:synthetic-destination')
-        (self.settings / 'weechat-home').write_text(str(self.home))
+        self.data = self.root / 'database'
+        self.data.mkdir()
+        self.db = sqlite3.connect(self.data / 'main.db')
+        self.addCleanup(self.db.close)
+        self.db.execute('PRAGMA journal_mode=WAL')
+        self.db.execute('CREATE TABLE messages (body TEXT)')
+        self.db.execute("INSERT INTO messages VALUES ('committed in WAL')")
+        self.db.commit()
+        settings = self.root / 'settings'
+        settings.mkdir()
+        (settings / 'data-dir').write_text(str(self.data))
+        (settings / 'remote').write_text('test:destination')
+        config = self.root / 'rclone.conf'
+        config.write_text('synthetic config')
+        (settings / 'rclone-config').write_text(str(config))
         binaries = self.root / 'bin'
         binaries.mkdir()
         uploader = binaries / 'rclone'
-        uploader.write_text('#!/bin/sh\nprintf "%s" "$5" > "$TEST_DEST"\ncp "$4" "$TEST_UPLOAD"\n')
+        uploader.write_text('#!/bin/sh\nset -eu\n'
+                            'printf "%s" "$5" > "$TEST_DEST"\n'
+                            'printf "%s" "$4" > "$TEST_SNAPSHOT"\n'
+                            '[ "${TEST_FAIL:-0}" = 0 ] || exit 7\n'
+                            'cp "$4" "$TEST_UPLOAD"\n')
         uploader.chmod(0o755)
-        # Model the stripped environments of cron and administration shells; no inherited
-        # deployment values or personal config files are used by these tests.
         self.env = {'PATH': str(binaries) + ':/usr/bin:/bin',
-                    'DATA_DIR': str(self.data), 'BACKUP_SETTINGS_DIR': str(self.settings),
+                    'BACKUP_SETTINGS_DIR': str(settings),
                     'TEST_DEST': str(self.root / 'destination'),
-                    'TEST_UPLOAD': str(self.root / 'uploaded.tar.gz')}
+                    'TEST_SNAPSHOT': str(self.root / 'snapshot-path'),
+                    'TEST_UPLOAD': str(self.root / 'uploaded.db')}
 
-    def run_backup(self):
+    def launch(self):
         return subprocess.run([str(SCRIPT)], env=self.env, capture_output=True, text=True)
 
-    def test_clean_environment_reads_settings(self):
-        result = self.run_backup()
+    def test_snapshot_contains_committed_wal_and_is_removed(self):
+        result = self.launch()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.root / 'destination').read_text(), 'test-remote:synthetic-destination')
-        with tarfile.open(self.root / 'uploaded.tar.gz') as archive:
-            self.assertEqual(archive.getnames(), ['custom-weechat/IRC.CONF'])
-        self.assertFalse((self.home / 'rotated.zst').exists())
-        self.assertTrue((self.home / 'chat.log').exists())
-        self.assertFalse((self.data / 'weechat.tar.gz').exists())
-        self.assertNotIn('test-remote', result.stdout + result.stderr)
+        with sqlite3.connect(self.root / 'uploaded.db') as snapshot:
+            self.assertEqual(snapshot.execute('SELECT body FROM messages').fetchall(),
+                             [('committed in WAL',)])
+            self.assertEqual(snapshot.execute('PRAGMA integrity_check').fetchone(), ('ok',))
+        self.assertFalse(Path((self.root / 'snapshot-path').read_text()).exists())
+        self.assertEqual((self.root / 'destination').read_text(), 'test:destination')
 
-    def test_explicit_environment_overrides_saved_remote(self):
-        self.env['WEECHAT_BACKUP_REMOTE'] = 'override:destination'
-        self.assertEqual(self.run_backup().returncode, 0)
-        self.assertEqual((self.root / 'destination').read_text(), 'override:destination')
+    def test_explicit_remote_is_literal(self):
+        marker = self.root / 'must-not-exist'
+        remote = 'remote:spaces; $(touch ' + str(marker) + ")'"
+        self.env['SOJU_BACKUP_REMOTE'] = remote
+        self.assertEqual(self.launch().returncode, 0)
+        self.assertEqual((self.root / 'destination').read_text(), remote)
+        self.assertFalse(marker.exists())
 
-    def test_saved_values_are_literal_not_shell_code(self):
-        sentinel = self.root / 'must-not-exist'
-        destination = 'remote:folder with spaces; $(touch ' + str(sentinel) + ')'
-        (self.settings / 'remote').write_text(destination)
-        self.assertEqual(self.run_backup().returncode, 0)
-        self.assertEqual((self.root / 'destination').read_text(), destination)
-        self.assertFalse(sentinel.exists())
+    def test_upload_failure_removes_snapshot(self):
+        self.env['TEST_FAIL'] = '1'
+        self.assertEqual(self.launch().returncode, 7)
+        self.assertFalse(Path((self.root / 'snapshot-path').read_text()).exists())
+        self.assertTrue((self.data / 'main.db').exists())
 
-    def test_missing_destination_fails_before_touching_logs(self):
-        (self.settings / 'remote').unlink()
-        result = self.run_backup()
+    def test_missing_remote_fails_without_upload(self):
+        (self.root / 'settings/remote').unlink()
+        result = self.launch()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('No backup destination configured', result.stderr)
-        self.assertTrue((self.home / 'rotated.zst').exists())
+        self.assertFalse((self.root / 'destination').exists())
+
+    def test_missing_database_does_not_create_empty_backup(self):
+        self.env['SOJU_DATA_DIR'] = str(self.root / 'missing')
+        self.assertNotEqual(self.launch().returncode, 0)
+        self.assertFalse((self.root / 'missing').exists())
+        self.assertFalse((self.root / 'destination').exists())
 
 
 if __name__ == '__main__':

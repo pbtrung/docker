@@ -28,7 +28,7 @@ if ! printf '%s\n' "$SSH_PUBLIC_KEY" | awk '
   exit 1
 fi
 
-# Keep the service account for WeeChat and alias its UID for SSH access.
+# Keep the service account for soju and alias its UID for SSH access.
 # Refuse existing system users instead of assigning them the login key.
 if [ "$SSH_USERNAME" != soju ]; then
   if awk -F: -v name="$SSH_USERNAME" '$1 == name { found=1 } END { exit !found }' /etc/passwd; then
