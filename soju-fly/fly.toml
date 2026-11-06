@@ -1,46 +1,24 @@
-# The app name isn't in the repo (it names the app's fly.dev hostname and
-# .internal address); flyctl takes it from FLY_APP, kept in the git-ignored
-# .env (see README).
+# FLY_APP is loaded from the git-ignored .env; see README.md.
 primary_region = 'iad'
 
-# soju is a bouncer: it must stay connected to the upstream IRC networks,
-# so the app runs exactly one machine, always on:
-# - no autoscaling: there's no service, so the Fly proxy never stops,
-#   starts or creates machines
-# - the volume attaches to one machine only, and soju can't run as several
-#   instances; deploy with --ha=false so the first deploy creates one
-#   machine, not two, and check with `fly scale show` (`fly scale count 1`)
-# - [[restart]] brings it back whenever soju exits or the machine crashes
-# No public ports: there is no [[services]] section, so the Fly proxy routes
-# nothing to the machine, whatever IPs the app has. gamja (8080) and IRC
-# (6667) are reached through the Twingate connector running on the machine,
-# which only makes outbound connections, or over Fly's private network.
-
-# soju shuts down cleanly on SIGTERM: it closes the upstream connections
-# and flushes the DB
 kill_signal = 'SIGTERM'
 kill_timeout = '30s'
-
-# 256 MB is tight for soju, nginx and the Twingate connector; swap keeps a spike from OOM-killing soju
 swap_size_mb = 512
 
 [build]
   dockerfile = 'Dockerfile'
 
-# A single machine with a volume can only be replaced in place: stop it,
-# then start the new image on the same volume
 [deploy]
   strategy = 'immediate'
 
-# soju DB and gamja
 [mounts]
   source = 'soju_data'
   destination = '/data'
   initial_size = '1gb'
 
-# Health check run by Fly on the machine itself
+# No public service: reach HTTP over cfmesh or Fly's private network.
 [checks]
-  [checks.nginx]
+  [checks.lighttpd]
     type = 'http'
     port = 8080
     method = 'GET'
@@ -49,8 +27,6 @@ swap_size_mb = 512
     interval = '30s'
     timeout = '5s'
 
-# Restart the machine whenever soju (or the entrypoint) exits, with no
-# retry limit
 [[restart]]
   policy = 'always'
 

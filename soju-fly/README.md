@@ -1,309 +1,139 @@
-# soju + gamja + nginx on Fly.io
+# soju-rs + gamja on Fly.io
 
-The [soju-nf](../soju-nf) image adapted for [Fly.io]. It runs:
+The soju and gamja setup from [soju-nf](../soju-nf), using WireGuard
+`cfmesh` for private access. lighttpd serves gamja on port 8080 and proxies
+`/socket` to soju on `127.0.0.1:8081`. Plain IRC listens on port 6667.
+`/test.html` serves the lighttpd test page; `/healthz` returns `ok`.
+Logs go to stdout/stderr, retaining the Fly logging permission fix.
 
-- [soju-rs] — Rust port of the [soju] IRC bouncer, static musl binaries
-  from the latest [pbtrung/soju-rs release][soju-rs releases]
-- [gamja] — IRC web client, prebuilt release from the [pbtrung/gamja] fork,
-  kept on the volume so it can be updated from a shell
-- nginx, one worker — serves gamja and proxies the IRC WebSocket
-  (`/socket`) to soju, on plain HTTP port 8080
-- a [Twingate connector] — the only way in from outside: it only makes
-  outbound connections to Twingate, so the app has no public port
+Fly runs one always-on 256 MB machine in `iad`, with no public service and
+a 1 GB volume `soju_data` mounted at `/data`. The database remains at
+`/data/soju/main.db`; existing users, networks, and history are reused.
+Gamja lives at `/data/gamja`. There is no backup job or snapshot retention.
+The SQLite CLI is not installed; soju-rs includes its SQLite support.
 
-The app has no `[[services]]`, so the Fly proxy routes nothing to the
-machine. gamja and soju's IRC port are reached as Twingate resources, from
-devices running the Twingate client, or over Fly's private network.
+The image downloads static musl binaries from `pbtrung/soju-rs` and gamja
+from `pbtrung/gamja`, matching soju-nf. Build arguments `SOJU_REF` and
+`GAMJA_REF` default to `latest`; amd64 and arm64 are supported. soju's
+release archive is checked against its `SHA256SUMS`.
 
-File uploads (IRCv3 filehost) are disabled: soju-rs doesn't support them
-and nginx doesn't proxy `/uploads`.
+## App name
 
-```
-browser ─Twingate─▶ connector (same machine) ─▶ nginx :8080 ─┬─ /            gamja static files
-                                                             ├─ /config.json  gamja config
-                                                             ├─ /socket       ─▶ soju 127.0.0.1:8081 (WebSocket)
-                                                             └─ /healthz      200 ok
-IRC client ─Twingate─▶ connector ─▶ soju :6667 plain IRC
-Fly health check ──▶ nginx :8080
-```
-
-Ports 8080 and 6667 also listen on Fly's private network (6PN), e.g.
-`$FLY_APP.internal:6667`, which `fly proxy` and `fly wireguard` can reach.
-
-Fly settings (`fly.toml`): app from `$FLY_APP` (see [App name](#app-name)), region `iad`, one
-`shared-cpu-1x` machine with 256 MB, no public service, and a 1 GB volume
-`soju_data` at `/data`. It holds:
-
-```
-/data/
-├── soju/main.db                 SQLite DB (SOJU_DATA_DIR)
-├── gamja/                       gamja web client (GAMJA_DATA_DIR)
-└── update-gamja.sh              gamja updater, copied on every start
-```
-
-## Files
-
-| File              | Purpose |
-| ----------------- | ------- |
-| `fly.toml`        | Fly app config: no public service, `/healthz` check, volume, VM size |
-| `Dockerfile`      | `builder` stage downloads a soju-rs release (checked against its `SHA256SUMS`) and a gamja release, and copies the Twingate connector (with its glibc libraries) from `twingate/connector:1`; runtime stage on alpine:edge installs nginx, rclone and sqlite with `apk` |
-| `soju.conf`       | soju config, installed as `/etc/soju/config`: DB, message expiry, `chathistory-limit`, listeners, hostname |
-| `soju-wrapper.sh` | Installed as `soju` and `sojuctl`: runs the soju-rs binary with `-config /etc/soju/config` |
-| `entrypoint.sh`   | Installs gamja on the volume, uses `SOJU_CONFIG_FILE` as the soju config if set, creates the first admin, starts the Twingate connector, nginx, then soju |
-| `update-gamja.sh` | Installs a gamja release (latest, or a given tag) into `GAMJA_DATA_DIR` |
-| `nginx.conf`      | One worker; plain HTTP server on 8080, per-IP limits |
-| `gamja-locations.conf` | gamja, `/config.json`, `/socket` and `/healthz` locations |
-
-## Environment variables
-
-Set plain values under `[env]` in `fly.toml`, and secrets with
-`fly secrets set`.
-
-| Variable              | Default                                     | Description |
-| --------------------- | ------------------------------------------- | ----------- |
-| `TWINGATE_NETWORK`    | —                                           | Twingate network name (the `<network>` of `<network>.twingate.com`). **Secret** |
-| `TWINGATE_ACCESS_TOKEN` | —                                         | Connector access token. **Secret** |
-| `TWINGATE_REFRESH_TOKEN` | —                                        | Connector refresh token. **Secret**. The connector only starts when all three are set; the tokens are removed from the environment before nginx and soju start |
-| `TWINGATE_RESOURCE_IP` | `100.120.10.1`                           | Private IPv4 added to the machine's loopback: the Twingate Resource address |
-| `SOJU_ADMIN_USER`     | —                                           | Admin user created on first start (only while `/data/soju/main.db` doesn't exist) |
-| `SOJU_ADMIN_PASSWORD` | —                                           | Password for that admin user. **Secret** |
-| `SOJU_CONFIG_FILE`    | —                                           | Path to a complete soju config to use instead of the bundled `soju.conf` |
-| `GAMJA_CONFIG_JSON`   | `{"server":{"auth":"mandatory","ping":30}}` | gamja [config file] contents, served at `/config.json` |
-| `SOJU_DATA_DIR`       | `/data/soju`                                | Where the soju DB (`main.db`) is stored. Must match the `db` path of the soju config |
-| `GAMJA_DATA_DIR`      | `/data/gamja`                               | Where gamja is installed; `update-gamja.sh` is copied to its parent directory |
-
-Build arguments: `SOJU_REF` (default `latest`) selects the
-[soju-rs release][soju-rs releases] to install (e.g. `v0.99.2`).
-`GAMJA_REF` (default `latest`) selects the gamja release
-bundled in the image, only installed on a volume without gamja.
-
-The release metadata (GitHub's latest soju-rs and gamja releases) is fetched with `ADD` on every build, so a new release
-invalidates the cached download layers: "latest" really is the latest, even
-with the build cache. The startup log shows the soju-rs version running
-(`Starting soju-rs vX`).
-
-## Deploy
-
-Run these from this directory (`soju-fly/`), logged in with `fly auth login`.
-
-### App name
-
-The app name is part of its `<app>.fly.dev` hostname and `<app>.internal`
-address, so it's kept out of the repo: `fly.toml` has no `app`, and flyctl
-reads the `FLY_APP` environment variable instead. Keep it in `.env`
-(ignored by git and Docker), with the Twingate values: `soju` and 38
-random lowercase letters and digits, 42 characters in all:
+Run commands from this directory. Keep `FLY_APP` in the git-ignored
+`.env`: `soju-` followed by exactly 23 random lowercase letters or digits.
+To generate a new name (once, before creating the app):
 
 ```sh
-printf 'FLY_APP=soju%s\n' "$(LC_ALL=C tr -dc a-z0-9 </dev/urandom | head -c 38)" > .env
+python3 -c 'import secrets, string; print("FLY_APP=soju-" + "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(23)))' > .env
 ```
 
-Load it in each shell before running `fly` commands:
+Load it before running Fly commands (bash/zsh):
 
 ```sh
-export $(cat .env)            # fish, or bash/zsh
+set -a
+. ./.env
+set +a
 ```
 
-Without `FLY_APP`, `fly deploy` stops with an error rather than deploying
-somewhere else.
+## WireGuard secret and deployment
 
-### Twingate
+`CFMESH_CONFIG` is a required Fly secret containing the complete, multiline
+`wg-quick` configuration. Startup writes it to
+`/etc/wireguard/cfmesh.conf` with mode `0600` in a `0700` directory,
+removes it from the environment, and runs `wg-quick up cfmesh`.
+Missing secrets or tunnel setup failures stop startup before HTTP is served.
 
-In the Twingate admin console:
-
-1. Add a Remote Network (e.g. `fly`), then a connector in it: choose
-   Docker and generate tokens. Put them in `.env` with the network name:
-
-   ```
-   TWINGATE_NETWORK=<network>         # <network>.twingate.com
-   TWINGATE_ACCESS_TOKEN=...
-   TWINGATE_REFRESH_TOKEN=...
-   ```
-
-2. Add a Resource in that Remote Network with the address `100.120.10.1`
-   (`TWINGATE_RESOURCE_IP`) and ports `8080` (gamja) and `6667` (IRC), and
-   give your group access to it.
-
-Twingate Resources must be IPv4, and `<FLY_APP>.internal` only has an IPv6
-(6PN) address: as a Resource, the client resolves it but the connector
-can't connect, and browsers get an empty reply. The connector runs on the
-soju machine, so `entrypoint.sh` adds `TWINGATE_RESOURCE_IP` to its
-loopback interface; nginx (`0.0.0.0:8080`) and soju (`[::]:6667`)
-answer on it. `127.0.0.1` can't be the Resource: the client device would
-answer it itself. `100.120.10.1` is in the carrier-grade NAT range
-(`100.64.0.0/10`) but outside `100.96.0.0/12`, where the Twingate client
-puts the addresses it gives DNS Resources, and `100.95.0.x`, its DNS
-servers. To change it, set `TWINGATE_RESOURCE_IP` and the Resource
-together.
-
-From a device running the Twingate client, gamja is at
-`http://100.120.10.1:8080` and IRC at `100.120.10.1:6667` (plain IRC;
-Twingate encrypts the tunnel). An IP Resource needs no DNS, so it works
-with browsers' secure DNS (DoH). `entrypoint.sh` also maps
-`soju.internal` to the address in `/etc/hosts`, which the connector reads
-(glibc, with `hosts: files dns` in `/etc/nsswitch.conf`): a Resource
-`soju.internal` works too, but only for apps that use the system resolver,
-not a browser with secure DNS on.
-
-### Deploy
+Keep the source config outside the build directory. Set the secret from
+your existing config, then deploy:
 
 ```sh
-# 1. App and volume
 fly apps create "$FLY_APP"
-fly volumes create soju_data --region iad --size 1
-
-# 2. Secrets
-fly secrets set --stage \
-  SOJU_ADMIN_USER=admin \
-  SOJU_ADMIN_PASSWORD='<a strong password>'
-grep '^TWINGATE_' .env | fly secrets import --stage
-
-# 3. Build and deploy a single machine
-fly deploy --ha=false
+fly volumes create soju_data --app "$FLY_APP" --region iad --size 1
+fly secrets set --app "$FLY_APP" --stage CFMESH_CONFIG="$(cat /path/to/cfmesh.conf)"
+fly deploy --app "$FLY_APP" --ha=false
 ```
 
-`--stage` stores the secrets without restarting anything; the first deploy
-picks them up.
+For an existing app, create the volume once with the command above, then
+redeploy to attach it at `/data`. Keep the app on one machine so it uses
+that volume.
 
-With no service, the app needs no IP address: `fly deploy` doesn't
-allocate one, and an existing one routes nothing. To drop the old
-dedicated IPv6, `fly ips list` and `fly ips release <address>`; a shared
-IPv4 can stay.
+Fly injects secrets as environment variables at boot; see
+[Fly secrets](https://fly.io/docs/apps/secrets/).
+The config must supply this machine's private key, addresses, and peers.
+The runtime needs kernel WireGuard support and permission to create network
+interfaces; local container runs need `--cap-add NET_ADMIN`.
+`openresolv` supports a config's `DNS` setting, and `iptables` supports
+`wg-quick` default-route handling.
 
-The startup log shows `Starting the Twingate connector for network ...`,
-then the connector's `State: Online`; the connector also shows as
-connected in the admin console. `fly ssh console -C 'connectorctl health'`
-checks it from the machine.
+## Move the existing database
 
-Keep a single machine: the volume can only attach to one, and soju
-can't run as several instances. To check, run `fly scale show`. If
-there are more, run `fly scale count 1`. With no service, the Fly proxy
-never stops, starts or creates machines, and `[[restart]] policy = 'always'`
-restarts the machine if soju exits.
+The same path does not copy data between Northflank and Fly. Before the
+first soju deployment, transfer a consistent database export to the Fly
+volume while Fly is still running the lighttpd-only image. Do not replace
+the database while Fly soju is running.
 
-The connector binaries in the `twingate/connector:1` image are linked
-against glibc, which Alpine doesn't have: the build copies them with the
-glibc libraries from the same image into `/opt/twingate`, and patches
-their ELF interpreter and RPATH to load only those. Each `fly deploy`
-picks up the latest `1.x` connector.
-
-The image build runs on Fly's remote builder and only installs packages and
-downloads releases.
-
-### Log in
-
-With the Twingate client connected, open `http://100.120.10.1:8080`.
-gamja loads. Log in with
-`SOJU_ADMIN_USER` / `SOJU_ADMIN_PASSWORD`, then add an upstream network,
-either in gamja's "add network" UI or with `BouncerServ`:
-
-```
-/msg BouncerServ network create -addr ircs://irc.libera.chat -name libera -nick yournick
-/msg BouncerServ sasl set-plain -network libera yournick <nickserv-password>
-```
-
-`/msg BouncerServ help` lists every command. After the first start you can
-remove the admin password: `fly secrets unset SOJU_ADMIN_PASSWORD`.
-
-### Manage users
-
-From gamja as an admin (`/msg BouncerServ user create -username bob -password <password>`),
-or from a shell on the machine:
+On the Northflank container, create a consistent export (including WAL data):
 
 ```sh
-fly ssh console
-sojuctl user create -username bob -password <password>
-sojuctl user status
+sqlite3 /data/soju/main.db ".backup '/tmp/main.db'"
 ```
 
-`sojuctl` already knows where the config is (`/etc/soju/config`). soju-rs
-has no `sojudb`: the entrypoint creates the first admin with `sojuctl` over
-the admin socket once soju is up.
-
-## Updating
-
-- `fly deploy` rebuilds the image and picks up the latest soju-rs release
-  (check `Starting soju-rs vX` in `fly logs`). The DB lives on the
-  volume and survives it. soju migrates its schema itself on startup.
-- gamja is updated from a shell, not by a new image:
-
-  ```sh
-  fly ssh console -C /data/update-gamja.sh            # latest release
-  fly ssh console -C '/data/update-gamja.sh v0.999.0' # a specific tag
-  ```
-
-  The script downloads the release's `.zip`, unpacks it next to the current
-  copy and swaps the two directories, so nginx never serves a half-installed
-  tree. Set `FORCE=1` to reinstall the same tag. Reload gamja in the browser
-  afterwards. No restart is needed.
-
-## Backups
-
-Fly takes daily snapshots of the volume (`fly volumes snapshots list <volume-id>`).
-To copy the DB out, first take a consistent copy with the `sqlite3` CLI
-(soju keeps writing to `main.db` and its `-wal` file while it runs):
+Download that export to your workstation, stop the old Northflank service
+for the final cutover, and upload the final export to Fly:
 
 ```sh
-fly ssh console -C "sqlite3 /data/soju/main.db '.backup /tmp/main.db'"
-fly ssh sftp get /tmp/main.db main.db
+fly ssh console --app "$FLY_APP" -C 'mkdir -p /data/soju'
+fly ssh sftp put --app "$FLY_APP" --mode 0600 ./main.db /data/soju/main.db
+fly deploy --app "$FLY_APP" --ha=false
 ```
 
-`sqlite3` also lets you inspect the DB from a shell, e.g.
-`sqlite3 -readonly /data/soju/main.db '.tables'`.
+Make the final export after stopping writes on the source so changes made
+after an earlier export are not lost. Startup fixes ownership for the
+`soju` account (UID/GID 1000). The Northflank configuration is unchanged.
 
-## Message expiry
+## soju settings
 
-soju deletes messages older than `message-expiry` in `soju.conf` (5 days)
-on startup and then daily, and vacuums the DB to give the space back to the
-volume.
+The bundled config uses `message-store db`, five-day message expiry, and
+a 200-message CHATHISTORY limit, matching soju-nf. Startup waits for the
+admin socket before serving gamja and supervises soju and lighttpd.
 
-## History limit
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SOJU_CONFIG_FILE` | `/usr/share/soju/config` | Optional replacement config copied to `/etc/soju/config` |
+| `SOJU_DATA_DIR` | `/data/soju` | Permissions path; custom configs must use the corresponding DB path |
+| `SOJU_STARTUP_TIMEOUT` | `1800` | Admin socket startup timeout in seconds; `0` waits indefinitely |
+| `SOJU_ADMIN_USER` | `admin` | Bootstrap admin username |
+| `SOJU_ADMIN_PASSWORD` | unset | Creates an admin if absent; existing admin passwords are preserved |
+| `GAMJA_DATA_DIR` | `/data/gamja` | Persistent gamja installation |
+| `GAMJA_CONFIG_JSON` | mandatory auth, ping 30s | Gamja settings served at `/config.json` |
+| `TZ` | `UTC` | Service time zone |
 
-`chathistory-limit 200` in `soju.conf` caps each CHATHISTORY reply at 200
-messages: gamja loads the latest 200 lines of each buffer on connect (its
-default), and fetches older or missed messages in more requests. This keeps
-soju's memory down on the 256 MB machine while gamja loads every buffer.
-
-## Run locally
+For a fresh database, set the initial password before deployment:
 
 ```sh
-docker build -t soju-fly soju-fly/
-docker run --rm -p 8080:8080 -v soju-data:/data \
-  -e SOJU_ADMIN_USER=admin -e SOJU_ADMIN_PASSWORD=changeme \
-  soju-fly
+fly secrets set --app "$FLY_APP" --stage SOJU_ADMIN_PASSWORD='<strong password>'
 ```
 
-gamja is then at `http://localhost:8080`. Without the `TWINGATE_*`
-variables, the connector stays off.
+With an imported database, use its existing credentials. Admin commands
+use `/etc/soju/config` automatically:
 
-## Notes
+```sh
+fly ssh console --app "$FLY_APP" -C 'su-exec soju sojuctl user status admin'
+```
 
-- Through Twingate, nginx sees every client at the connector's address, so
-  the per-IP limits apply to all Twingate users together: 60 requests per
-  minute for gamja's files (burst 30) and 20 concurrent connections; nginx
-  closes the connection on a violation. soju also sees that address as
-  every client's host (`X-Forwarded-For`, trusted from loopback with
-  `accept-proxy-ip localhost`). Any `Forwarded` header from a client is
-  dropped, since soju prefers it.
-- Nothing listens publicly: there's no service for the Fly proxy to route,
-  and the connector only connects out. Twingate checks who may reach the
-  resource before any traffic gets to nginx or soju.
-- gamja sends `PING` every 30 s by default (`GAMJA_CONFIG_JSON`) to keep
-  its WebSocket open through NAT and proxies.
-- The connector runs as the `twingate` user, restarted 5 s after it exits;
-  soju stays the main process, so a connector crash doesn't stop the
-  bouncer.
-- The machine never stops on its own, and `[[restart]] policy = 'always'`
-  restarts it if soju exits. Deploys stop it and start the new image on the
-  same volume (`strategy = 'immediate'`), sending soju `SIGTERM` with 30 s
-  to shut down cleanly. 512 MB of swap keeps a memory spike from
-  OOM-killing soju on the 256 MB VM, now shared with the connector.
+Update gamja without rebuilding by running `/data/update-gamja.sh` inside
+the machine. The next image deployment preserves the installed gamja.
 
-[Fly.io]: https://fly.io/
-[soju]: https://soju.im/
-[soju-rs]: https://github.com/pbtrung/soju-rs
-[soju-rs releases]: https://github.com/pbtrung/soju-rs/releases
-[gamja]: https://codeberg.org/emersion/gamja
-[pbtrung/gamja]: https://github.com/pbtrung/gamja
-[Twingate connector]: https://www.twingate.com/docs/connectors
-[config file]: https://codeberg.org/emersion/gamja/src/branch/master/doc/config-file.md
+## Verify
+
+```sh
+fly logs
+fly checks list
+fly ssh console -C 'wg show cfmesh'
+fly proxy 8080:8080
+```
+
+With the proxy running, open `http://localhost:8080/` and
+`http://localhost:8080/healthz`; the test page is at `/test.html`. From a peer with the appropriate routes,
+use `http://<cfmesh-address>:8080/` directly. Keep exactly one machine
+with `fly scale count 1`.

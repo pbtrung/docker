@@ -1,13 +1,9 @@
-FROM twingate/connector:1 AS twingate
-
 FROM alpine:edge AS builder
-
-# Fail a RUN when any command of a pipe fails, not just the last one
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
 ARG GAMJA_REF=latest
 ARG SOJU_REF=latest
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 
 RUN apk update && \
     apk --no-cache upgrade && \
@@ -51,66 +47,29 @@ ADD https://api.github.com/repos/pbtrung/gamja/releases/latest /tmp/gamja-latest
 COPY update-gamja.sh /usr/local/bin/
 RUN GAMJA_DATA_DIR=/out/gamja update-gamja.sh "${GAMJA_REF}"
 
-# Twingate connector: the official image's binaries are linked against glibc,
-# which Alpine doesn't have. Copy them with the glibc libraries they need
-# (from the same image) into /out/twingate, and point their ELF interpreter
-# and RPATH there. DT_RPATH (--force-rpath) rather than RUNPATH, because it
-# also applies to the libraries' own dependencies (libsystemd's libzstd,
-# liblz4, ...), so none of Alpine's musl libraries get loaded.
-COPY --from=twingate /connectord /connectorctl /tmp/twingate/bin/
-COPY --from=twingate /lib/ /tmp/twingate/lib/
-COPY --from=twingate /usr/lib/ /tmp/twingate/usr-lib/
-RUN apk --no-cache add patchelf && \
-    mkdir -p /out/twingate/lib && \
-    cp -a /tmp/twingate/lib/*-linux-gnu*/* /tmp/twingate/usr-lib/*-linux-gnu*/* \
-      /out/twingate/lib/ && \
-    rm -rf /out/twingate/lib/gconv && \
-    ld="$(basename /out/twingate/lib/ld-linux-*.so.*)" && \
-    for bin in connectord connectorctl; do \
-      cp /tmp/twingate/bin/$bin /out/twingate/ && \
-      patchelf --set-interpreter "/opt/twingate/lib/$ld" \
-        --force-rpath --set-rpath /opt/twingate/lib /out/twingate/$bin; \
-    done
-
 FROM alpine:edge
 
-RUN addgroup -g 1000 soju && \
-    adduser -u 1000 -G soju -D soju && \
-    addgroup -S twingate && \
-    adduser -S -G twingate -H -h /run/twingate twingate
+RUN apk --no-cache upgrade && \
+    apk --no-cache add ca-certificates tzdata rclone tini lighttpd su-exec \
+      wireguard-tools bash iproute2 openresolv iptables && \
+    mkdir -p /etc/wireguard /var/www/localhost/htdocs && \
+    chmod 700 /etc/wireguard && \
+    addgroup -g 1000 soju && \
+    adduser -u 1000 -G soju -D -H -h /data -s /bin/ash soju
 
-# rclone: copy backups off the machine from a shell.
-# sqlite: inspect the soju DB and take consistent backups from a shell.
-RUN apk update && \
-    apk --no-cache upgrade && \
-    apk --no-cache add ca-certificates tzdata nginx su-exec \
-      rclone sqlite
-
-COPY --from=builder /out/gamja /usr/share/gamja-dist
-COPY --from=builder /out/twingate /opt/twingate
-RUN ln -s /opt/twingate/connectorctl /usr/local/bin/connectorctl
-# Where the connector keeps its API socket and crash reports; connectorctl
-# (e.g. `connectorctl health` from a shell) finds the socket here
-ENV TWINGATE_API_ENDPOINT=/run/twingate/connector.sock \
-    TWINGATE_CRASH_REPORTING_DIR=/run/twingate/sentry
-# The connector resolves Resources with glibc, which (unlike musl) reads
-# nsswitch.conf: check /etc/hosts first, for soju.internal (entrypoint.sh)
-RUN printf "hosts: files dns\n" >/etc/nsswitch.conf
-# soju-rs binaries have no built-in config path: the soju and sojuctl
-# wrappers in /usr/local/bin pass -config /etc/soju/config, so sojuctl works
-# without flags inside the container shell.
 COPY --from=builder /out/soju /usr/local/lib/soju
+COPY --from=builder /out/gamja /usr/share/gamja-dist
 COPY soju-wrapper.sh /usr/local/bin/soju
 COPY soju-wrapper.sh /usr/local/bin/sojuctl
-COPY soju.conf /etc/soju/config
+COPY soju.conf /usr/share/soju/config
+COPY update-gamja.sh /usr/local/bin/
+COPY lighttpd.conf /script/lighttpd.conf
+COPY index.html /var/www/localhost/htdocs/test.html
+COPY entrypoint.sh /script/entrypoint.sh
+RUN printf 'ok\n' >/var/www/localhost/htdocs/healthz
 
-WORKDIR /script
-COPY entrypoint.sh /script/
-COPY nginx.conf gamja-locations.conf /script/
-COPY update-gamja.sh /usr/local/bin/update-gamja.sh
-
-# 8080: nginx (gamja + WebSocket), 6667: soju plain IRC. Neither is public:
-# they're reached through the Twingate connector or Fly's private network.
-EXPOSE 8080 6667/tcp
-
-ENTRYPOINT ["/script/entrypoint.sh"]
+WORKDIR /data
+EXPOSE 8080/tcp 6667/tcp
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD ["/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+ENTRYPOINT ["/sbin/tini", "-s", "-g", "--", "/script/entrypoint.sh"]
